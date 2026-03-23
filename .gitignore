@@ -1,0 +1,14 @@
+# OAuth credentials — never commit
+oauth2.json
+
+# API cache files
+.yahoo_cache.pkl
+.mlb_cache.pkl
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Environment variables
+.env
