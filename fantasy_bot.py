@@ -17,8 +17,8 @@ from analyzer import analyze
 # Email utilities
 # ---------------------------------------------------------------------------
 
-def _send_email(subject, body, to_addr=None):
-    """Send email with subject and body. Uses Gmail by default."""
+def _send_email(subject, html_body, to_addr=None):
+    """Send HTML email. Uses Gmail by default."""
     if to_addr is None:
         to_addr = os.environ.get('EMAIL_TO')
     if not to_addr:
@@ -32,11 +32,11 @@ def _send_email(subject, body, to_addr=None):
     if not smtp_user or not smtp_password:
         raise ValueError('SMTP_USER and SMTP_PASSWORD required. Set env vars for email authentication.')
 
-    msg = MIMEMultipart()
+    msg = MIMEMultipart('alternative')
     msg['Subject'] = subject
     msg['From'] = smtp_user
     msg['To'] = to_addr
-    msg.attach(MIMEText(body, 'plain'))
+    msg.attach(MIMEText(html_body, 'html'))
 
     try:
         with smtplib.SMTP(smtp_server, smtp_port) as server:
@@ -47,6 +47,43 @@ def _send_email(subject, body, to_addr=None):
     except Exception as e:
         print(f"✗ Failed to send email: {e}", file=sys.stderr)
         raise
+
+
+def _md_to_html(text):
+    """Convert basic markdown (**, *, #, newlines) to HTML."""
+    import re
+    text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+    text = re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)
+    text = re.sub(r'^#{1,3} (.+)$', r'<strong>\1</strong>', text, flags=re.MULTILINE)
+    text = text.replace('\n', '<br>')
+    return text
+
+
+def _h(title, color='#1a1a2e'):
+    return (f'<h2 style="margin:24px 0 6px;padding:8px 12px;background:{color};'
+            f'color:#fff;font-size:13px;letter-spacing:1px;font-family:monospace">'
+            f'{title}</h2>')
+
+
+def _table(headers, rows, col_styles=None):
+    """Render a simple HTML table."""
+    th_style = ('padding:5px 10px;text-align:left;background:#2d2d44;'
+                'color:#ccc;font-size:11px;font-family:monospace')
+    td_style = 'padding:4px 10px;font-size:12px;font-family:monospace;border-bottom:1px solid #eee'
+    html = ['<table style="width:100%;border-collapse:collapse;margin-bottom:8px">']
+    html.append('<tr>' + ''.join(f'<th style="{th_style}">{h}</th>' for h in headers) + '</tr>')
+    for row in rows:
+        html.append('<tr>' + ''.join(
+            f'<td style="{td_style}{";"+col_styles[i] if col_styles and i < len(col_styles) else ""}">{cell}</td>'
+            for i, cell in enumerate(row)
+        ) + '</tr>')
+    html.append('</table>')
+    return '\n'.join(html)
+
+
+def _badge(text, color='#555', bg='#eee'):
+    return (f'<span style="display:inline-block;padding:1px 6px;border-radius:3px;'
+            f'background:{bg};color:{color};font-size:11px;font-family:monospace">{text}</span>')
 
 
 def _capture_output(func, *args, **kwargs):
@@ -207,185 +244,288 @@ def cmd_advise(args):
 
 
 def cmd_email_report(args):
-    """Run analyze + advise and email the report."""
+    """Run analyze + advise and email the report as HTML."""
     to_addr = args.email if hasattr(args, 'email') and args.email else None
 
     lg = get_league(cache=args.cache)
     results = analyze(lg, progress=None)
 
-    lines = [f"Fantasy Baseball Daily Report — {datetime.date.today()}\n"]
+    # Pull all sections
+    injuries     = results.get('injuries', [])
+    streaming    = results.get('streaming', {})
+    waiver_p     = results.get('waiver_pitchers', [])
+    two_start    = results.get('two_start_pitchers', [])
+    cat_targets  = results.get('category_targets', {}) if isinstance(results.get('category_targets'), dict) else {}
+    trade        = results.get('trade_candidates', {}) if isinstance(results.get('trade_candidates'), dict) else {}
+    recent_form  = results.get('recent_form', {}) if isinstance(results.get('recent_form'), dict) else {}
+    news         = results.get('news', {}) if isinstance(results.get('news'), dict) else {}
+    cats         = results.get('categories', {}) if isinstance(results.get('categories'), dict) else {}
 
-    # Streaming pitchers
-    streaming = results.get('streaming', {})
-    targets = streaming.get('targets', []) if isinstance(streaming, dict) else []
-    lines.append("\nSTREAMING TARGETS (next 3 days):")
-    if targets:
-        lines.append("-" * 70)
-        for t in targets[:5]:
-            lines.append(
-                f"{t['player_name']:<20} {t['opponent']:<5} "
-                f"ERA {t['stats'].get('era', 0):>5.2f}  "
-                f"WHIP {t['stats'].get('whip', 0):>5.2f}  "
-                f"K/9 {t['stats'].get('k9', 0):>5.2f}"
-            )
+    # Build subject with category lead if available
+    cat_list = cats.get('cats', [])
+    leading  = cats.get('leading', 0)
+    opp      = cats.get('opp', '')
+    if cat_list and opp:
+        subject = (f"Fantasy Baseball — {datetime.date.today().strftime('%a, %b %d')} "
+                   f"| Leading {leading}/{len(cat_list)} vs {opp}")
     else:
-        lines.append("  None available")
+        subject = f"Fantasy Baseball — {datetime.date.today().strftime('%a, %b %d')}"
 
-    # Waiver pitchers
-    waiver_p = results.get('waiver_pitchers', [])
-    lines.append("\nWAIVER TARGETS (top RPs):")
-    if waiver_p:
-        lines.append("-" * 70)
-        for p in waiver_p[:5]:
-            lines.append(
-                f"{p['name']:<20} {p.get('source', 'W'):<3} "
-                f"SV+HLD {p['sv_hld']:>2}  "
-                f"ERA {p['stats'].get('era', 0):>5.2f}  "
-                f"WHIP {p['stats'].get('whip', 0):>5.2f}"
-            )
-    else:
-        lines.append("  None available")
-
-    # Recent form
-    recent_form = results.get('recent_form', {})
-    hot_bat  = recent_form.get('hot_batters', []) if isinstance(recent_form, dict) else []
-    cold_bat = recent_form.get('cold_batters', []) if isinstance(recent_form, dict) else []
-    hot_pit  = recent_form.get('hot_pitchers', []) if isinstance(recent_form, dict) else []
-    cold_pit = recent_form.get('cold_pitchers', []) if isinstance(recent_form, dict) else []
-    lines.append("\nRECENT FORM (last 14 days):")
-    if hot_bat:
-        lines.append("  Hot Batters:")
-        for p in hot_bat:
-            lines.append(
-                f"    {p['player_name']:<22} season OPS {p['season_ops']:.3f} "
-                f"-> {p['recent_ops']:.3f} ({p['ops_delta']:+.3f})"
-            )
-    if cold_bat:
-        lines.append("  Cold Batters:")
-        for p in cold_bat:
-            lines.append(
-                f"    {p['player_name']:<22} season OPS {p['season_ops']:.3f} "
-                f"-> {p['recent_ops']:.3f} ({p['ops_delta']:+.3f})"
-            )
-    if hot_pit:
-        lines.append("  Hot Pitchers:")
-        for p in hot_pit:
-            lines.append(
-                f"    {p['player_name']:<22} season ERA {p['season_era']:.2f} "
-                f"-> {p['recent_era']:.2f} ({p['era_delta']:+.2f})"
-            )
-    if cold_pit:
-        lines.append("  Cold Pitchers:")
-        for p in cold_pit:
-            lines.append(
-                f"    {p['player_name']:<22} season ERA {p['season_era']:.2f} "
-                f"-> {p['recent_era']:.2f} ({p['era_delta']:+.2f})"
-            )
-    if not any([hot_bat, cold_bat, hot_pit, cold_pit]):
-        lines.append("  No significant form swings.")
-
-    # Two-start pitchers
-    two_start = results.get('two_start_pitchers', [])
-    lines.append("\nTWO-START PITCHERS (next 7 days):")
-    if two_start:
-        lines.append("-" * 70)
-        for p in two_start:
-            for s in p['starts']:
-                ha      = 'home' if s['home'] else 'away'
-                opp_ops = f"  OppOPS {s['opp_ops']:.3f}" if s.get('opp_ops') else ''
-                lines.append(
-                    f"  {p['player_name']:<22} {s['date']}  "
-                    f"vs {s['opponent']:<25} ({ha}){opp_ops}"
-                )
-    else:
-        lines.append("  None found.")
-
-    # Category targets
-    cat_targets = results.get('category_targets', {})
-    if isinstance(cat_targets, dict):
-        chase   = cat_targets.get('chase', [])
-        concede = cat_targets.get('concede', [])
-        lines.append("\nCATEGORY TARGETS:")
-        if chase:
-            lines.append("  Chase:")
-            for c in chase:
-                sug = f"  {c['suggestion']}" if c.get('suggestion') else ''
-                lines.append(
-                    f"    {c['category']}: {c['mine']} vs {c['theirs']} "
-                    f"({c['gap_pct']*100:.1f}% behind){sug}"
-                )
-        if concede:
-            lines.append("  Concede:")
-            for c in concede:
-                lines.append(
-                    f"    {c['category']}: {c['mine']} vs {c['theirs']} "
-                    f"({c['gap_pct']*100:.1f}% behind)"
-                )
-        if not chase and not concede:
-            lines.append("  No matchup data available.")
-
-    # Trade candidates
-    trade = results.get('trade_candidates', {})
-    if isinstance(trade, dict):
-        sell = trade.get('sell_high', [])
-        buy  = trade.get('buy_low', [])
-        lines.append("\nTRADE CANDIDATES:")
-        if sell:
-            lines.append("  Sell High:")
-            for p in sell:
-                lines.append(f"    {p['player_name']:<22} {p['reason']}")
-        if buy:
-            lines.append("  Buy Low:")
-            for p in buy[:5]:
-                lines.append(
-                    f"    {p['player_name']:<22} season OPS {p['season_ops']:.3f}  "
-                    f"({p['percent_owned']}% owned)"
-                )
-        if not sell and not buy:
-            lines.append("  None identified.")
-
-    # News & transactions
-    news = results.get('news', {})
-    transactions = news.get('transactions', []) if isinstance(news, dict) else []
-    lines.append("\nRECENT TRANSACTIONS:")
-    if transactions:
-        lines.append("-" * 70)
-        for t in transactions[:5]:
-            team_str = f" ({t['team']})" if t.get('team') else ""
-            lines.append(f"{t['date']} | {t['type']:<20} | {t['player']}{team_str}")
-    else:
-        lines.append("  None")
-
-    # Roster schedule
-    roster_schedule = news.get('roster_schedule', []) if isinstance(news, dict) else []
-    lines.append("\nROSTER SCHEDULE (most games):")
-    if roster_schedule:
-        lines.append("-" * 70)
-        for p in roster_schedule[:5]:
-            lines.append(f"{p['name']:<20} ({p['team']:<4}) — {p['games']} games")
-    else:
-        lines.append("  None")
-
-    # Get AI advisor (call LLM directly to avoid duplicate analyze)
-    lines.append("\n" + "=" * 70)
-    lines.append("AI ADVISOR RECOMMENDATIONS:")
-    lines.append("=" * 70)
-
+    # Get AI advice first (goes at top of email)
     prompt = _build_advise_prompt(results)
     try:
         if os.environ.get('ANTHROPIC_API_KEY'):
-            advice = _get_advise_text_claude(prompt)
+            advice_text = _get_advise_text_claude(prompt)
         elif os.environ.get('GOOGLE_API_KEY'):
-            advice = _get_advise_text_gemini(prompt)
+            advice_text = _get_advise_text_gemini(prompt)
         else:
-            advice = "Set ANTHROPIC_API_KEY or GOOGLE_API_KEY to enable AI advice."
-        lines.append(advice)
+            advice_text = 'Set ANTHROPIC_API_KEY or GOOGLE_API_KEY to enable AI advice.'
     except Exception as e:
-        lines.append(f"Error generating advice: {e}")
+        advice_text = f'Error generating advice: {e}'
 
-    body = '\n'.join(lines)
-    subject = f"Fantasy Baseball — {datetime.date.today().strftime('%a, %b %d')}"
-    _send_email(subject, body, to_addr)
+    # Wrapper style
+    wrap  = 'max-width:680px;margin:0 auto;font-family:monospace;color:#222;background:#fff'
+    muted = 'color:#888;font-size:11px'
+    none_msg = '<p style="color:#999;font-size:12px;margin:4px 12px">None.</p>'
+
+    html = [f'<div style="{wrap}">']
+
+    # ── Header ──────────────────────────────────────────────────────────────
+    html.append(
+        f'<div style="background:#1a1a2e;padding:16px 20px">'
+        f'<span style="color:#fff;font-size:16px;font-weight:bold">⚾ Fantasy Baseball</span>'
+        f'<span style="float:right;color:#aaa;font-size:12px">'
+        f'{datetime.date.today().strftime("%A, %B %d, %Y")}</span></div>'
+    )
+    if cat_list and opp:
+        my_team = cats.get('my_team', 'Your team')
+        win_color = '#2ecc71' if leading > len(cat_list) / 2 else '#e74c3c'
+        html.append(
+            f'<div style="background:#2d2d44;padding:8px 20px;color:#ccc;font-size:12px">'
+            f'Week {cats.get("week","?")}  ·  {my_team} vs {opp}  ·  '
+            f'<span style="color:{win_color};font-weight:bold">Leading {leading}/{len(cat_list)} categories</span>'
+            f'</div>'
+        )
+
+    # ── AI Advisor (top) ────────────────────────────────────────────────────
+    html.append(_h('AI ADVISOR RECOMMENDATIONS', '#2c3e50'))
+    html.append(
+        f'<div style="padding:10px 16px;background:#f9f9f9;border-left:3px solid #2c3e50;'
+        f'font-size:13px;line-height:1.6">{_md_to_html(advice_text)}</div>'
+    )
+
+    # ── Injuries ────────────────────────────────────────────────────────────
+    html.append(_h('INJURY ALERTS', '#c0392b'))
+    if injuries:
+        rows = []
+        for a in injuries:
+            action_color = '#c0392b' if 'immediately' in a['action'] else '#e67e22'
+            rows.append([
+                f'<strong>{a["player_name"]}</strong>',
+                _badge(a['status'], '#fff', '#c0392b'),
+                a['current_slot'],
+                f'<span style="color:{action_color}">{a["action"]}</span>',
+            ])
+        html.append(_table(['Player', 'Status', 'Slot', 'Action'], rows))
+    else:
+        html.append('<p style="color:#2ecc71;font-size:12px;margin:4px 12px">All clear.</p>')
+
+    # ── Streaming Targets ───────────────────────────────────────────────────
+    html.append(_h('STREAMING TARGETS (next 3 days)'))
+    targets = streaming.get('targets', []) if isinstance(streaming, dict) else []
+    if targets:
+        rows = []
+        for t in targets[:5]:
+            s  = t.get('stats', {})
+            ha = _badge('Home', '#fff', '#27ae60') if t.get('home') else _badge('Away', '#555', '#ddd')
+            rows.append([
+                f'<strong>{t["player_name"]}</strong>',
+                _badge(t['source'], '#fff', '#555'),
+                t['start_date'],
+                t['opponent'],
+                ha,
+                f'{s.get("era", "--")}',
+                f'{s.get("whip", "--")}',
+                f'{s.get("k9", "--")}',
+            ])
+        html.append(_table(['Name', 'Src', 'Date', 'Opp', 'H/A', 'ERA', 'WHIP', 'K/9'], rows))
+    else:
+        html.append(none_msg)
+
+    # ── Waiver RP Targets ───────────────────────────────────────────────────
+    html.append(_h('WAIVER / FA RELIEVER TARGETS'))
+    if waiver_p:
+        rows = []
+        for p in waiver_p[:5]:
+            s = p['stats']
+            rows.append([
+                f'<strong>{p["name"]}</strong>',
+                _badge(p['source'], '#fff', '#555'),
+                f'{p["percent_owned"]}%',
+                f'<strong>{p["sv_hld"]}</strong>',
+                s.get('era', '--'),
+                s.get('whip', '--'),
+            ])
+        html.append(_table(['Name', 'Src', '%Own', 'SV+HLD', 'ERA', 'WHIP'], rows))
+    else:
+        html.append(none_msg)
+
+    # ── Two-Start Pitchers ──────────────────────────────────────────────────
+    html.append(_h('TWO-START PITCHERS (next 7 days)'))
+    if two_start:
+        rows = []
+        for p in two_start:
+            starts_html = ''
+            for s in p['starts']:
+                ha      = _badge('Home', '#fff', '#27ae60') if s['home'] else _badge('Away', '#555', '#ddd')
+                opp_ops = f'  <span style="{muted}">OppOPS {s["opp_ops"]:.3f}</span>' if s.get('opp_ops') else ''
+                starts_html += f'{s["date"]} vs {s["opponent"]} {ha}{opp_ops}<br>'
+            rows.append([f'<strong>{p["player_name"]}</strong>', starts_html.rstrip('<br>')])
+        html.append(_table(['Pitcher', 'Starts'], rows))
+    else:
+        html.append(none_msg)
+
+    # ── Category Targets ────────────────────────────────────────────────────
+    html.append(_h('CATEGORY TARGETS'))
+    chase   = cat_targets.get('chase', [])
+    concede = cat_targets.get('concede', [])
+    if chase or concede:
+        if chase:
+            html.append('<p style="margin:6px 12px 2px;font-size:11px;color:#27ae60"><strong>CHASE</strong></p>')
+            rows = []
+            for c in chase:
+                sug = f'<br><span style="{muted}">{c["suggestion"]}</span>' if c.get('suggestion') else ''
+                rows.append([
+                    f'<strong>{c["category"]}</strong>',
+                    str(c['mine']),
+                    str(c['theirs']),
+                    f'{c["gap_pct"]*100:.1f}% behind',
+                    sug or '—',
+                ])
+            html.append(_table(['Category', 'Yours', 'Theirs', 'Gap', 'Suggestion'], rows))
+        if concede:
+            html.append('<p style="margin:6px 12px 2px;font-size:11px;color:#e74c3c"><strong>CONCEDE</strong> '
+                        f'<span style="{muted}">(gap too large to close)</span></p>')
+            rows = []
+            for c in concede:
+                rows.append([
+                    f'<strong>{c["category"]}</strong>',
+                    str(c['mine']),
+                    str(c['theirs']),
+                    f'{c["gap_pct"]*100:.1f}% behind',
+                    c.get('suggestion', '—'),
+                ])
+            html.append(_table(['Category', 'Yours', 'Theirs', 'Gap', 'Suggestion'], rows))
+    else:
+        html.append(none_msg)
+
+    # ── Trade Candidates ────────────────────────────────────────────────────
+    html.append(_h('TRADE CANDIDATES'))
+    sell = trade.get('sell_high', [])
+    buy  = trade.get('buy_low', [])
+    if sell or buy:
+        if sell:
+            html.append('<p style="margin:6px 12px 2px;font-size:11px"><strong>SELL HIGH</strong></p>')
+            rows = [[f'<strong>{p["player_name"]}</strong>', p['reason']] for p in sell]
+            html.append(_table(['Player', 'Reason'], rows))
+        if buy:
+            html.append('<p style="margin:6px 12px 2px;font-size:11px"><strong>BUY LOW</strong></p>')
+            rows = [
+                [f'<strong>{p["player_name"]}</strong>',
+                 f'{p["season_ops"]:.3f}',
+                 f'{p["percent_owned"]}%']
+                for p in buy[:5]
+            ]
+            html.append(_table(['Player', 'Season OPS', '%Own'], rows))
+    else:
+        html.append(none_msg)
+
+    # ── Recent Form ─────────────────────────────────────────────────────────
+    html.append(_h('RECENT FORM (last 14 days)'))
+    hot_bat  = recent_form.get('hot_batters', [])
+    cold_bat = recent_form.get('cold_batters', [])
+    hot_pit  = recent_form.get('hot_pitchers', [])
+    cold_pit = recent_form.get('cold_pitchers', [])
+
+    # Check if cold players appear in trade sell-high list
+    sell_names = {p['player_name'] for p in sell} if sell else set()
+
+    if any([hot_bat, cold_bat, hot_pit, cold_pit]):
+        def _form_rows_bat(players, delta_color):
+            rows = []
+            for p in players:
+                note = _badge('→ Sell?', '#fff', '#e74c3c') if p['player_name'] in sell_names else ''
+                rows.append([
+                    f'<strong>{p["player_name"]}</strong>',
+                    f'{p["season_ops"]:.3f}',
+                    f'<span style="color:{delta_color};font-weight:bold">{p["recent_ops"]:.3f}</span>',
+                    f'<span style="color:{delta_color}">{p["ops_delta"]:+.3f}</span>',
+                    note,
+                ])
+            return rows
+
+        def _form_rows_pit(players, delta_color):
+            rows = []
+            for p in players:
+                note = _badge('→ Sell?', '#fff', '#e74c3c') if p['player_name'] in sell_names else ''
+                rows.append([
+                    f'<strong>{p["player_name"]}</strong>',
+                    f'{p["season_era"]:.2f}',
+                    f'<span style="color:{delta_color};font-weight:bold">{p["recent_era"]:.2f}</span>',
+                    f'<span style="color:{delta_color}">{p["era_delta"]:+.2f}</span>',
+                    note,
+                ])
+            return rows
+
+        if hot_bat:
+            html.append('<p style="margin:6px 12px 2px;font-size:11px;color:#27ae60"><strong>HOT BATTERS</strong></p>')
+            html.append(_table(['Player', 'Season OPS', 'L14 OPS', 'Δ', ''], _form_rows_bat(hot_bat, '#27ae60')))
+        if cold_bat:
+            html.append('<p style="margin:6px 12px 2px;font-size:11px;color:#e74c3c"><strong>COLD BATTERS</strong></p>')
+            html.append(_table(['Player', 'Season OPS', 'L14 OPS', 'Δ', ''], _form_rows_bat(cold_bat, '#e74c3c')))
+        if hot_pit:
+            html.append('<p style="margin:6px 12px 2px;font-size:11px;color:#27ae60"><strong>HOT PITCHERS</strong></p>')
+            html.append(_table(['Player', 'Season ERA', 'L14 ERA', 'Δ', ''], _form_rows_pit(hot_pit, '#27ae60')))
+        if cold_pit:
+            html.append('<p style="margin:6px 12px 2px;font-size:11px;color:#e74c3c"><strong>COLD PITCHERS</strong></p>')
+            html.append(_table(['Player', 'Season ERA', 'L14 ERA', 'Δ', ''], _form_rows_pit(cold_pit, '#e74c3c')))
+    else:
+        html.append('<p style="color:#999;font-size:12px;margin:4px 12px">No significant form swings.</p>')
+
+    # ── Recent Transactions ──────────────────────────────────────────────────
+    html.append(_h('RECENT TRANSACTIONS'))
+    transactions = news.get('transactions', [])
+    if transactions:
+        rows = [
+            [t['date'], t['type'], f'<strong>{t["player"]}</strong>', t.get('team', '')]
+            for t in transactions[:5]
+        ]
+        html.append(_table(['Date', 'Type', 'Player', 'Team'], rows))
+    else:
+        html.append(none_msg)
+
+    # ── Roster Schedule ──────────────────────────────────────────────────────
+    html.append(_h('ROSTER SCHEDULE (most games this week)'))
+    roster_schedule = news.get('roster_schedule', [])
+    if roster_schedule:
+        rows = [
+            [f'<strong>{p["name"]}</strong>', p['team'],
+             _badge(f'{p["games"]} games', '#fff', '#2c3e50')]
+            for p in roster_schedule[:8]
+        ]
+        html.append(_table(['Player', 'Team', 'Games'], rows))
+    else:
+        html.append(none_msg)
+
+    # ── Footer ───────────────────────────────────────────────────────────────
+    html.append(
+        f'<div style="margin-top:24px;padding:10px 16px;background:#f0f0f0;'
+        f'color:#aaa;font-size:10px;text-align:center">'
+        f'Generated {datetime.datetime.now().strftime("%Y-%m-%d %H:%M")}</div>'
+    )
+    html.append('</div>')
+
+    _send_email(subject, '\n'.join(html), to_addr)
 
 
 def _advise_claude(prompt):
