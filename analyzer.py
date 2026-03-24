@@ -3,7 +3,9 @@ import datetime
 from mlb_stats import (
     get_probable_starters,
     get_pitcher_stats,
+    get_recent_pitcher_stats,
     get_batter_stats,
+    get_recent_batter_stats,
     get_transactions,
     get_schedule_density,
     get_player_teams,
@@ -11,6 +13,10 @@ from mlb_stats import (
 )
 
 INJURY_STATUSES = {'DTD', 'IL10', 'IL15', 'IL60', 'NA', 'SUSP', 'IL'}
+HOT_BATTER_OPS_DELTA  = +0.100
+COLD_BATTER_OPS_DELTA = -0.100
+HOT_PITCHER_ERA_DELTA  = -1.00
+COLD_PITCHER_ERA_DELTA = +1.00
 ACTIVE_BATTER_SLOTS = {'C', '1B', '2B', '3B', 'SS', 'OF', 'Util'}
 ACTIVE_PITCHER_SLOTS = {'SP', 'RP', 'P'}
 IL_SLOTS = {'IL'}
@@ -47,12 +53,14 @@ def analyze(lg, section=None, days=3, progress=None):
     roster = tm.roster(day=datetime.date.today())
 
     runners = {
-        'injuries':        lambda: _injuries(roster),
-        'streaming':       lambda: _streaming(lg, roster, days, _prog),
-        'waivers':         lambda: _waivers(lg, roster, _prog),
-        'waiver_pitchers': lambda: _waiver_pitchers(lg, _prog),
-        'categories':      lambda: _categories(lg),
-        'news':            lambda: _news(roster, _prog),
+        'injuries':           lambda: _injuries(roster),
+        'streaming':          lambda: _streaming(lg, roster, days, _prog),
+        'waivers':            lambda: _waivers(lg, roster, _prog),
+        'waiver_pitchers':    lambda: _waiver_pitchers(lg, _prog),
+        'categories':         lambda: _categories(lg),
+        'news':               lambda: _news(roster, _prog),
+        'recent_form':        lambda: _recent_form(roster, _prog),
+        'two_start_pitchers': lambda: _two_start_pitchers(roster, _prog),
     }
 
     if section:
@@ -521,3 +529,164 @@ def _news(roster, progress=None):
         'schedule_density': sorted_density,
         'roster_schedule':  roster_schedule,
     }
+
+
+# ---------------------------------------------------------------------------
+# Section: recent_form
+# ---------------------------------------------------------------------------
+
+def _recent_form(roster, progress=None):
+    """
+    Compares last-14-day stats vs season stats for active roster players.
+    Returns:
+      hot_batters   - [{player_name, player_id, slot, season_ops, recent_ops, ops_delta,
+                        recent_avg, recent_hr, recent_sb, recent_pa}]
+      cold_batters  - same shape
+      hot_pitchers  - [{player_name, player_id, slot, season_era, recent_era, era_delta,
+                        recent_whip, recent_k9, recent_ip}]
+      cold_pitchers - same shape
+    """
+    def _p(msg):
+        if progress: progress(msg)
+
+    active_batters = [
+        p for p in roster
+        if p['selected_position'] in ACTIVE_BATTER_SLOTS
+        and p.get('status', '') not in INJURY_STATUSES
+    ]
+    active_pitchers = [
+        p for p in roster
+        if p['selected_position'] in ACTIVE_PITCHER_SLOTS
+        and p.get('status', '') not in INJURY_STATUSES
+    ]
+
+    batter_names  = [p['name'] for p in active_batters]
+    pitcher_names = [p['name'] for p in active_pitchers]
+
+    _p(f"Fetching season batter stats for {len(batter_names)} active batters...")
+    season_bat = get_batter_stats(batter_names)
+    _p("Fetching last-14-day batter stats...")
+    recent_bat = get_recent_batter_stats(batter_names)
+
+    _p(f"Fetching season pitcher stats for {len(pitcher_names)} active pitchers...")
+    season_pit = get_pitcher_stats(pitcher_names)
+    _p("Fetching last-14-day pitcher stats...")
+    recent_pit = get_recent_pitcher_stats(pitcher_names)
+
+    hot_batters, cold_batters = [], []
+    batter_slot = {p['name']: p['selected_position'] for p in active_batters}
+    for p in active_batters:
+        name = p['name']
+        ss = season_bat.get(name, {})
+        rs = recent_bat.get(name, {})
+        if not ss or not rs or rs.get('pa', 0) < 5:
+            continue
+        season_ops = ss.get('obp', 0) + ss.get('slg', 0)
+        recent_ops = rs.get('obp', 0) + rs.get('slg', 0)
+        delta = recent_ops - season_ops
+        entry = {
+            'player_name': name,
+            'player_id':   p['player_id'],
+            'slot':        p['selected_position'],
+            'season_ops':  round(season_ops, 3),
+            'recent_ops':  round(recent_ops, 3),
+            'ops_delta':   round(delta, 3),
+            'recent_avg':  rs.get('avg', 0),
+            'recent_hr':   rs.get('hr', 0),
+            'recent_sb':   rs.get('sb', 0),
+            'recent_pa':   rs.get('pa', 0),
+        }
+        if delta >= HOT_BATTER_OPS_DELTA:
+            hot_batters.append(entry)
+        elif delta <= COLD_BATTER_OPS_DELTA:
+            cold_batters.append(entry)
+
+    hot_batters.sort(key=lambda x: -x['ops_delta'])
+    cold_batters.sort(key=lambda x:  x['ops_delta'])
+
+    hot_pitchers, cold_pitchers = [], []
+    for p in active_pitchers:
+        name = p['name']
+        ss = season_pit.get(name, {})
+        rs = recent_pit.get(name, {})
+        if not ss or not rs or rs.get('ip', 0) < 3 or ss.get('era', 0) == 0:
+            continue
+        season_era = ss.get('era', 0)
+        recent_era = rs.get('era', 0)
+        delta = recent_era - season_era
+        entry = {
+            'player_name': name,
+            'player_id':   p['player_id'],
+            'slot':        p['selected_position'],
+            'season_era':  season_era,
+            'recent_era':  recent_era,
+            'era_delta':   round(delta, 2),
+            'recent_whip': rs.get('whip', 0),
+            'recent_k9':   rs.get('k9', 0),
+            'recent_ip':   rs.get('ip', 0),
+        }
+        if delta <= HOT_PITCHER_ERA_DELTA:
+            hot_pitchers.append(entry)
+        elif delta >= COLD_PITCHER_ERA_DELTA:
+            cold_pitchers.append(entry)
+
+    hot_pitchers.sort(key=lambda x:  x['era_delta'])
+    cold_pitchers.sort(key=lambda x: -x['era_delta'])
+
+    return {
+        'hot_batters':   hot_batters,
+        'cold_batters':  cold_batters,
+        'hot_pitchers':  hot_pitchers,
+        'cold_pitchers': cold_pitchers,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Section: two_start_pitchers
+# ---------------------------------------------------------------------------
+
+def _two_start_pitchers(roster, progress=None):
+    """
+    Returns list of your active roster pitchers with 2+ starts in the next 7 days.
+    Each dict: {player_name, player_id, slot, starts: [{date, opponent, home}]}
+    Sorted by number of starts descending, then player name.
+    """
+    def _p(msg):
+        if progress: progress(msg)
+
+    active_pitchers = {
+        p['name']: p for p in roster
+        if p['selected_position'] in ACTIVE_PITCHER_SLOTS
+        and p.get('status', '') not in INJURY_STATUSES
+    }
+
+    if not active_pitchers:
+        return []
+
+    _p("Fetching 7-day probable starters for two-start check...")
+    probable = get_probable_starters(days=7)
+
+    starts_by_name = {}
+    for s in probable:
+        name = s['name']
+        if name not in active_pitchers:
+            continue
+        starts_by_name.setdefault(name, []).append({
+            'date':     s['date'],
+            'opponent': s['opponent'],
+            'home':     s['home'],
+        })
+
+    results = []
+    for name, start_list in starts_by_name.items():
+        if len(start_list) >= 2:
+            p = active_pitchers[name]
+            results.append({
+                'player_name': name,
+                'player_id':   p['player_id'],
+                'slot':        p['selected_position'],
+                'starts':      start_list,
+            })
+
+    results.sort(key=lambda x: (-len(x['starts']), x['player_name']))
+    return results

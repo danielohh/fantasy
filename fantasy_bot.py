@@ -178,6 +178,10 @@ def cmd_analyze(args):
         _print_categories(results['categories'])
     if 'news' in results:
         _print_news(results['news'])
+    if 'recent_form' in results:
+        _print_recent_form(results['recent_form'])
+    if 'two_start_pitchers' in results:
+        _print_two_start_pitchers(results['two_start_pitchers'])
 
 
 def cmd_advise(args):
@@ -237,6 +241,59 @@ def cmd_email_report(args):
             )
     else:
         lines.append("  None available")
+
+    # Recent form
+    recent_form = results.get('recent_form', {})
+    hot_bat  = recent_form.get('hot_batters', []) if isinstance(recent_form, dict) else []
+    cold_bat = recent_form.get('cold_batters', []) if isinstance(recent_form, dict) else []
+    hot_pit  = recent_form.get('hot_pitchers', []) if isinstance(recent_form, dict) else []
+    cold_pit = recent_form.get('cold_pitchers', []) if isinstance(recent_form, dict) else []
+    lines.append("\nRECENT FORM (last 14 days):")
+    if hot_bat:
+        lines.append("  Hot Batters:")
+        for p in hot_bat:
+            lines.append(
+                f"    {p['player_name']:<22} season OPS {p['season_ops']:.3f} "
+                f"-> {p['recent_ops']:.3f} ({p['ops_delta']:+.3f})"
+            )
+    if cold_bat:
+        lines.append("  Cold Batters:")
+        for p in cold_bat:
+            lines.append(
+                f"    {p['player_name']:<22} season OPS {p['season_ops']:.3f} "
+                f"-> {p['recent_ops']:.3f} ({p['ops_delta']:+.3f})"
+            )
+    if hot_pit:
+        lines.append("  Hot Pitchers:")
+        for p in hot_pit:
+            lines.append(
+                f"    {p['player_name']:<22} season ERA {p['season_era']:.2f} "
+                f"-> {p['recent_era']:.2f} ({p['era_delta']:+.2f})"
+            )
+    if cold_pit:
+        lines.append("  Cold Pitchers:")
+        for p in cold_pit:
+            lines.append(
+                f"    {p['player_name']:<22} season ERA {p['season_era']:.2f} "
+                f"-> {p['recent_era']:.2f} ({p['era_delta']:+.2f})"
+            )
+    if not any([hot_bat, cold_bat, hot_pit, cold_pit]):
+        lines.append("  No significant form swings.")
+
+    # Two-start pitchers
+    two_start = results.get('two_start_pitchers', [])
+    lines.append("\nTWO-START PITCHERS (next 7 days):")
+    if two_start:
+        lines.append("-" * 70)
+        for p in two_start:
+            for s in p['starts']:
+                ha = 'home' if s['home'] else 'away'
+                lines.append(
+                    f"  {p['player_name']:<22} {s['date']}  "
+                    f"vs {s['opponent']:<25} ({ha})"
+                )
+    else:
+        lines.append("  None found.")
 
     # News & transactions
     news = results.get('news', {})
@@ -443,11 +500,119 @@ def _build_advise_prompt(results):
         lines.append('  Most games:  ' + ', '.join(f"{t} ({n})" for t, n in top))
         lines.append('  Least games: ' + ', '.join(f"{t} ({n})" for t, n in bottom))
 
+    recent_form = results.get('recent_form', {})
+    if isinstance(recent_form, dict):
+        hot_bat  = recent_form.get('hot_batters', [])
+        cold_bat = recent_form.get('cold_batters', [])
+        hot_pit  = recent_form.get('hot_pitchers', [])
+        cold_pit = recent_form.get('cold_pitchers', [])
+        if hot_bat or cold_bat or hot_pit or cold_pit:
+            lines.append('\nRECENT FORM (last 14 days):')
+        if hot_bat:
+            lines.append('  Hot batters:')
+            for p in hot_bat:
+                lines.append(
+                    f"    {p['player_name']} — season OPS {p['season_ops']:.3f} "
+                    f"→ last-14d OPS {p['recent_ops']:.3f} ({p['ops_delta']:+.3f})"
+                )
+        if cold_bat:
+            lines.append('  Cold batters:')
+            for p in cold_bat:
+                lines.append(
+                    f"    {p['player_name']} — season OPS {p['season_ops']:.3f} "
+                    f"→ last-14d OPS {p['recent_ops']:.3f} ({p['ops_delta']:+.3f})"
+                )
+        if hot_pit:
+            lines.append('  Hot pitchers:')
+            for p in hot_pit:
+                lines.append(
+                    f"    {p['player_name']} — season ERA {p['season_era']:.2f} "
+                    f"→ last-14d ERA {p['recent_era']:.2f} ({p['era_delta']:+.2f})"
+                )
+        if cold_pit:
+            lines.append('  Cold pitchers:')
+            for p in cold_pit:
+                lines.append(
+                    f"    {p['player_name']} — season ERA {p['season_era']:.2f} "
+                    f"→ last-14d ERA {p['recent_era']:.2f} ({p['era_delta']:+.2f})"
+                )
+
+    two_start = results.get('two_start_pitchers', [])
+    if two_start:
+        lines.append('\nTWO-START PITCHERS ON YOUR ROSTER (next 7 days):')
+        for p in two_start:
+            opps = ', '.join(
+                f"vs {s['opponent']} ({'home' if s['home'] else 'away'})"
+                for s in p['starts']
+            )
+            lines.append(f"  {p['player_name']} — {len(p['starts'])} starts: {opps}")
+
     lines.append(
         '\nGive me 2-3 prioritized, specific moves to make today. '
         'Be direct — no filler.'
     )
     return '\n'.join(lines)
+
+
+def _print_recent_form(data):
+    _header("RECENT FORM (last 14 days)")
+    hot_bat  = data.get('hot_batters', [])
+    cold_bat = data.get('cold_batters', [])
+    hot_pit  = data.get('hot_pitchers', [])
+    cold_pit = data.get('cold_pitchers', [])
+
+    if not any([hot_bat, cold_bat, hot_pit, cold_pit]):
+        print("  No significant form swings on your active roster.")
+        return
+
+    if hot_bat:
+        print("  HOT BATTERS (OPS delta >= +0.100):")
+        print(f"  {'Name':<22} {'Slot':<6} {'SeasonOPS':<10} {'14dOPS':<9} {'Delta':<8} {'AVG':<6} {'HR':<4} {'SB':<4} PA")
+        print(f"  {'-'*82}")
+        for p in hot_bat:
+            print(f"  {p['player_name']:<22} {p['slot']:<6} {p['season_ops']:<10.3f} "
+                  f"{p['recent_ops']:<9.3f} +{p['ops_delta']:<7.3f} "
+                  f"{p['recent_avg']:<6} {p['recent_hr']:<4} {p['recent_sb']:<4} {p['recent_pa']}")
+
+    if cold_bat:
+        print("\n  COLD BATTERS (OPS delta <= -0.100):")
+        print(f"  {'Name':<22} {'Slot':<6} {'SeasonOPS':<10} {'14dOPS':<9} {'Delta':<8} {'AVG':<6} {'HR':<4} {'SB':<4} PA")
+        print(f"  {'-'*82}")
+        for p in cold_bat:
+            print(f"  {p['player_name']:<22} {p['slot']:<6} {p['season_ops']:<10.3f} "
+                  f"{p['recent_ops']:<9.3f} {p['ops_delta']:<8.3f} "
+                  f"{p['recent_avg']:<6} {p['recent_hr']:<4} {p['recent_sb']:<4} {p['recent_pa']}")
+
+    if hot_pit:
+        print("\n  HOT PITCHERS (ERA last 14d significantly better):")
+        print(f"  {'Name':<22} {'Slot':<6} {'SeasonERA':<10} {'14dERA':<8} {'Delta':<8} {'WHIP':<6} {'K/9':<6} IP")
+        print(f"  {'-'*75}")
+        for p in hot_pit:
+            print(f"  {p['player_name']:<22} {p['slot']:<6} {p['season_era']:<10.2f} "
+                  f"{p['recent_era']:<8.2f} {p['era_delta']:<8.2f} "
+                  f"{p['recent_whip']:<6} {p['recent_k9']:<6.1f} {p['recent_ip']}")
+
+    if cold_pit:
+        print("\n  COLD PITCHERS (ERA last 14d significantly worse):")
+        print(f"  {'Name':<22} {'Slot':<6} {'SeasonERA':<10} {'14dERA':<8} {'Delta':<8} {'WHIP':<6} {'K/9':<6} IP")
+        print(f"  {'-'*75}")
+        for p in cold_pit:
+            print(f"  {p['player_name']:<22} {p['slot']:<6} {p['season_era']:<10.2f} "
+                  f"{p['recent_era']:<8.2f} +{p['era_delta']:<7.2f} "
+                  f"{p['recent_whip']:<6} {p['recent_k9']:<6.1f} {p['recent_ip']}")
+
+
+def _print_two_start_pitchers(data):
+    _header("TWO-START PITCHERS (next 7 days)")
+    if not data:
+        print("  No pitchers on your roster with 2+ starts this week.")
+        return
+    for p in data:
+        starts = p['starts']
+        print(f"  {p['player_name']:<25} (slot {p['slot']}) — {len(starts)} starts:")
+        for s in starts:
+            ha = 'home' if s['home'] else 'away'
+            print(f"    {s['date']}  vs {s['opponent']:<25} ({ha})")
 
 
 def _header(title):
@@ -646,7 +811,8 @@ def main():
     p.set_defaults(func=cmd_advise)
 
     p = sub.add_parser('analyze', help='Roster analysis, streaming targets, waiver pickups')
-    p.add_argument('--section', choices=['injuries', 'streaming', 'waivers', 'waiver_pitchers', 'categories', 'news'],
+    p.add_argument('--section', choices=['injuries', 'streaming', 'waivers', 'waiver_pitchers',
+                                          'categories', 'news', 'recent_form', 'two_start_pitchers'],
                    default=None, help='Run one section only (default: all)')
     p.add_argument('--days', type=int, default=3,
                    help='Days ahead to look for streaming starts (default: 3)')
