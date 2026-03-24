@@ -260,3 +260,74 @@ def get_batter_stats(names):
         except Exception:
             pass
     return result
+
+
+def get_recent_batter_stats(names):
+    """
+    Return dict of name -> {avg, obp, slg, hr, rbi, r, sb, bb, pa}
+    for the last 14 days. Same shape as get_batter_stats for easy delta computation.
+    """
+    result = {}
+    for name in names:
+        pid = _lookup_player_id(name)
+        if pid is None:
+            continue
+        try:
+            data = _api_get('people/' + str(pid), {
+                'hydrate': 'stats(group=hitting,type=last14)',
+            })
+            splits = (data.get('people', [{}])[0]
+                      .get('stats', [{}])[0]
+                      .get('splits', []))
+            if not splits:
+                continue
+            s = splits[0]['stat']
+            result[name] = {
+                'avg': float(s.get('avg', 0) or 0),
+                'obp': float(s.get('obp', 0) or 0),
+                'slg': float(s.get('slg', 0) or 0),
+                'hr':  int(s.get('homeRuns', 0) or 0),
+                'rbi': int(s.get('rbi', 0) or 0),
+                'r':   int(s.get('runs', 0) or 0),
+                'sb':  int(s.get('stolenBases', 0) or 0),
+                'bb':  int(s.get('baseOnBalls', 0) or 0),
+                'pa':  int(s.get('plateAppearances', 0) or 0),
+            }
+        except Exception:
+            pass
+    return result
+
+
+def get_recent_pitcher_stats(names):
+    """
+    Return dict of name -> {era, whip, k9, ip, wins, saves, holds, qs}
+    for the last 14 days. Same shape as get_pitcher_stats for easy delta computation.
+    """
+    result = {}
+    for name in names:
+        pid = _lookup_player_id(name)
+        if pid is None:
+            continue
+        try:
+            data = _api_get('people/' + str(pid), {
+                'hydrate': 'stats(group=pitching,type=last14)',
+            })
+            splits = (data.get('people', [{}])[0]
+                      .get('stats', [{}])[0]
+                      .get('splits', []))
+            if not splits:
+                continue
+            s = splits[0]['stat']
+            result[name] = {
+                'era':   float(s.get('era', 0) or 0),
+                'whip':  float(s.get('whip', 0) or 0),
+                'k9':    float(s.get('strikeoutsPer9Inn', 0) or 0),
+                'ip':    float(s.get('inningsPitched', 0) or 0),
+                'wins':  int(s.get('wins', 0) or 0),
+                'saves': int(s.get('saves', 0) or 0),
+                'holds': int(s.get('holds', 0) or 0),
+                'qs':    int(s.get('qualityStarts', 0) or 0),
+            }
+        except Exception:
+            pass
+    return result
