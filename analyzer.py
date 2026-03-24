@@ -62,6 +62,7 @@ def analyze(lg, section=None, days=3, progress=None):
         'news':               lambda: _news(roster, _prog),
         'recent_form':        lambda: _recent_form(roster, _prog),
         'two_start_pitchers': lambda: _two_start_pitchers(roster, _prog),
+        'standings':          lambda: _standings(lg),
     }
 
     # Derived sections depend on other sections' results
@@ -475,6 +476,30 @@ def _categories(lg):
             'leading': sum(1 for c in cats if c['winning']),
         }
 
+    except Exception as e:
+        return {'error': str(e)}
+
+
+def _standings(lg):
+    """Return my team's standings: rank, wins, losses, ties, total_teams."""
+    try:
+        my_key = lg.team_key()
+        raw = lg.standings()
+        total = len(raw)
+        for team in raw:
+            if not isinstance(team, dict):
+                continue
+            if team.get('team_key', '') != my_key:
+                continue
+            ot = team.get('outcome_totals', {})
+            return {
+                'rank':        team.get('rank', '?'),
+                'wins':        ot.get('wins', '?'),
+                'losses':      ot.get('losses', '?'),
+                'ties':        ot.get('ties', 0),
+                'total_teams': total,
+            }
+        return {'rank': '?', 'wins': '?', 'losses': '?', 'ties': 0, 'total_teams': total}
     except Exception as e:
         return {'error': str(e)}
 

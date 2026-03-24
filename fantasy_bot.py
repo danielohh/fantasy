@@ -592,6 +592,31 @@ def _get_advise_text_gemini(prompt):
 def _build_advise_prompt(results):
     lines = []
 
+    # League context header
+    today = datetime.date.today()
+    day_name = today.strftime('%A')
+    cats = results.get('categories', {})
+    cat_list = cats.get('cats', []) if cats and 'error' not in cats else []
+    scoring_cats = ', '.join(c['category'] for c in cat_list) if cat_list else 'unknown'
+
+    standings = results.get('standings', {})
+    if standings and 'error' not in standings:
+        rank  = standings.get('rank', '?')
+        wins  = standings.get('wins', '?')
+        losses = standings.get('losses', '?')
+        ties  = standings.get('ties', 0)
+        total = standings.get('total_teams', '?')
+        record_str = f"{wins}-{losses}" + (f"-{ties}" if ties else '')
+        lines.append(
+            f"League: {total}-team H2H categories. Scoring: {scoring_cats}.\n"
+            f"Standings: {record_str}, rank {rank}/{total}. Today: {day_name}."
+        )
+    else:
+        lines.append(
+            f"League: H2H categories. Scoring: {scoring_cats}.\n"
+            f"Today: {day_name}."
+        )
+
     injuries = results.get('injuries', [])
     if injuries:
         lines.append('INJURY ALERTS:')
@@ -652,20 +677,15 @@ def _build_advise_prompt(results):
                         f"(OPS +{u.get('ops_delta',0):.3f})"
                     )
 
-    cats = results.get('categories', {})
-    if cats and 'error' not in cats:
-        cat_list = cats.get('cats', [])
-        winning  = [c['category'] for c in cat_list if c['winning']]
-        losing   = [c['category'] for c in cat_list if not c['winning']]
+    if cat_list:
         lines.append(
             f"\nH2H CATEGORIES (Week {cats.get('week','?')}): "
             f"{cats.get('my_team','Me')} vs {cats.get('opp','Opp')} — "
             f"leading {cats.get('leading',0)}/{len(cat_list)}"
         )
-        if winning:
-            lines.append(f"  Winning: {', '.join(winning)}")
-        if losing:
-            lines.append(f"  Losing:  {', '.join(losing)}")
+        for c in cat_list:
+            result = 'WIN' if c['winning'] else 'LOSE'
+            lines.append(f"  {c['category']:<6} {str(c.get('mine','?')):>8} vs {str(c.get('theirs','?')):<8}  {result}")
 
     news = results.get('news', {})
     transactions = news.get('transactions', [])
@@ -775,8 +795,8 @@ def _build_advise_prompt(results):
                 lines.append(f"    {p['player_name']} — season OPS {p['season_ops']:.3f}")
 
     lines.append(
-        '\nGive me 2-3 prioritized, specific moves to make today. '
-        'Be direct — no filler.'
+        '\nGive me 2-3 specific moves, prioritized by: (1) impact on this week\'s matchup, '
+        'then (2) roster improvement. One sentence per move. No preamble.'
     )
     return '\n'.join(lines)
 
@@ -1092,7 +1112,7 @@ def main():
     p.add_argument('--section',
                    choices=['injuries', 'streaming', 'waivers', 'waiver_pitchers',
                             'categories', 'news', 'recent_form', 'two_start_pitchers',
-                            'category_targets', 'trade_candidates'],
+                            'category_targets', 'trade_candidates', 'standings'],
                    default=None, help='Run one section only (default: all)')
     p.add_argument('--days', type=int, default=3,
                    help='Days ahead to look for streaming starts (default: 3)')
