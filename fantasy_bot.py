@@ -182,6 +182,10 @@ def cmd_analyze(args):
         _print_recent_form(results['recent_form'])
     if 'two_start_pitchers' in results:
         _print_two_start_pitchers(results['two_start_pitchers'])
+    if 'category_targets' in results:
+        _print_category_targets(results['category_targets'])
+    if 'trade_candidates' in results:
+        _print_trade_candidates(results['trade_candidates'])
 
 
 def cmd_advise(args):
@@ -219,7 +223,7 @@ def cmd_email_report(args):
         lines.append("-" * 70)
         for t in targets[:5]:
             lines.append(
-                f"{t['name']:<20} {t['opp']:<5} "
+                f"{t['player_name']:<20} {t['opponent']:<5} "
                 f"ERA {t['stats'].get('era', 0):>5.2f}  "
                 f"WHIP {t['stats'].get('whip', 0):>5.2f}  "
                 f"K/9 {t['stats'].get('k9', 0):>5.2f}"
@@ -287,13 +291,58 @@ def cmd_email_report(args):
         lines.append("-" * 70)
         for p in two_start:
             for s in p['starts']:
-                ha = 'home' if s['home'] else 'away'
+                ha      = 'home' if s['home'] else 'away'
+                opp_ops = f"  OppOPS {s['opp_ops']:.3f}" if s.get('opp_ops') else ''
                 lines.append(
                     f"  {p['player_name']:<22} {s['date']}  "
-                    f"vs {s['opponent']:<25} ({ha})"
+                    f"vs {s['opponent']:<25} ({ha}){opp_ops}"
                 )
     else:
         lines.append("  None found.")
+
+    # Category targets
+    cat_targets = results.get('category_targets', {})
+    if isinstance(cat_targets, dict):
+        chase   = cat_targets.get('chase', [])
+        concede = cat_targets.get('concede', [])
+        lines.append("\nCATEGORY TARGETS:")
+        if chase:
+            lines.append("  Chase:")
+            for c in chase:
+                sug = f"  {c['suggestion']}" if c.get('suggestion') else ''
+                lines.append(
+                    f"    {c['category']}: {c['mine']} vs {c['theirs']} "
+                    f"({c['gap_pct']*100:.1f}% behind){sug}"
+                )
+        if concede:
+            lines.append("  Concede:")
+            for c in concede:
+                lines.append(
+                    f"    {c['category']}: {c['mine']} vs {c['theirs']} "
+                    f"({c['gap_pct']*100:.1f}% behind)"
+                )
+        if not chase and not concede:
+            lines.append("  No matchup data available.")
+
+    # Trade candidates
+    trade = results.get('trade_candidates', {})
+    if isinstance(trade, dict):
+        sell = trade.get('sell_high', [])
+        buy  = trade.get('buy_low', [])
+        lines.append("\nTRADE CANDIDATES:")
+        if sell:
+            lines.append("  Sell High:")
+            for p in sell:
+                lines.append(f"    {p['player_name']:<22} {p['reason']}")
+        if buy:
+            lines.append("  Buy Low:")
+            for p in buy[:5]:
+                lines.append(
+                    f"    {p['player_name']:<22} season OPS {p['season_ops']:.3f}  "
+                    f"({p['percent_owned']}% owned)"
+                )
+        if not sell and not buy:
+            lines.append("  None identified.")
 
     # News & transactions
     news = results.get('news', {})
@@ -543,15 +592,103 @@ def _build_advise_prompt(results):
         for p in two_start:
             opps = ', '.join(
                 f"vs {s['opponent']} ({'home' if s['home'] else 'away'})"
+                + (f" OPS {s['opp_ops']:.3f}" if s.get('opp_ops') else '')
                 for s in p['starts']
             )
             lines.append(f"  {p['player_name']} — {len(p['starts'])} starts: {opps}")
+
+    cat_targets = results.get('category_targets', {})
+    if isinstance(cat_targets, dict):
+        chase   = cat_targets.get('chase', [])
+        concede = cat_targets.get('concede', [])
+        if chase or concede:
+            lines.append('\nCATEGORY TARGETS:')
+        if chase:
+            lines.append('  Chase (catchable):')
+            for c in chase:
+                sug = f" — {c['suggestion']}" if c.get('suggestion') else ''
+                lines.append(
+                    f"    {c['category']}: {c['mine']} vs {c['theirs']} "
+                    f"({c['gap_pct']*100:.1f}% behind){sug}"
+                )
+        if concede:
+            lines.append('  Concede (too far behind):')
+            for c in concede:
+                lines.append(
+                    f"    {c['category']}: {c['mine']} vs {c['theirs']} "
+                    f"({c['gap_pct']*100:.1f}% behind)"
+                )
+
+    trade = results.get('trade_candidates', {})
+    if isinstance(trade, dict):
+        sell = trade.get('sell_high', [])
+        buy  = trade.get('buy_low', [])
+        if sell or buy:
+            lines.append('\nTRADE CANDIDATES:')
+        if sell:
+            lines.append('  Sell high (likely to regress):')
+            for p in sell:
+                lines.append(f"    {p['player_name']} — {p['reason']}")
+        if buy:
+            lines.append('  Buy low (strong season stats, on waivers):')
+            for p in buy[:3]:
+                lines.append(f"    {p['player_name']} — season OPS {p['season_ops']:.3f}")
 
     lines.append(
         '\nGive me 2-3 prioritized, specific moves to make today. '
         'Be direct — no filler.'
     )
     return '\n'.join(lines)
+
+
+def _print_category_targets(data):
+    _header("CATEGORY TARGETS")
+    chase   = data.get('chase', [])
+    protect = data.get('protect', [])
+    concede = data.get('concede', [])
+
+    if not chase and not protect and not concede:
+        print("  No matchup data available.")
+        return
+
+    if chase:
+        print("  CHASE (catchable — prioritize these categories):")
+        for c in chase:
+            gap = f"{c['gap_pct']*100:.1f}% behind"
+            sug = f"  → {c['suggestion']}" if c.get('suggestion') else ''
+            print(f"    {c['category']:<6} {c['mine']:>8}  vs  {c['theirs']:>8}  ({gap}){sug}")
+
+    if concede:
+        print("\n  CONCEDE (too far behind — don't burn resources):")
+        for c in concede:
+            gap = f"{c['gap_pct']*100:.1f}% behind"
+            print(f"    {c['category']:<6} {c['mine']:>8}  vs  {c['theirs']:>8}  ({gap})")
+
+    if protect:
+        print("\n  PROTECT (currently winning — hold steady):")
+        cats = ', '.join(c['category'] for c in protect)
+        print(f"    {cats}")
+
+
+def _print_trade_candidates(data):
+    _header("TRADE CANDIDATES")
+    sell_high = data.get('sell_high', [])
+    buy_low   = data.get('buy_low', [])
+
+    if not sell_high and not buy_low:
+        print("  No trade candidates identified.")
+        return
+
+    if sell_high:
+        print("  SELL HIGH (extreme recent form — sell before regression):")
+        for p in sell_high:
+            print(f"    {p['player_name']:<25} {p['reason']}")
+
+    if buy_low:
+        print("\n  BUY LOW (strong season stats, available on waivers):")
+        for p in buy_low[:5]:
+            print(f"    {p['player_name']:<25} season OPS {p['season_ops']:.3f}  "
+                  f"({p['percent_owned']}% owned)")
 
 
 def _print_recent_form(data):
@@ -611,8 +748,9 @@ def _print_two_start_pitchers(data):
         starts = p['starts']
         print(f"  {p['player_name']:<25} (slot {p['slot']}) — {len(starts)} starts:")
         for s in starts:
-            ha = 'home' if s['home'] else 'away'
-            print(f"    {s['date']}  vs {s['opponent']:<25} ({ha})")
+            ha      = 'home' if s['home'] else 'away'
+            opp_ops = f"  OppOPS {s['opp_ops']:.3f}" if s.get('opp_ops') else ''
+            print(f"    {s['date']}  vs {s['opponent']:<25} ({ha}){opp_ops}")
 
 
 def _header(title):
@@ -811,8 +949,10 @@ def main():
     p.set_defaults(func=cmd_advise)
 
     p = sub.add_parser('analyze', help='Roster analysis, streaming targets, waiver pickups')
-    p.add_argument('--section', choices=['injuries', 'streaming', 'waivers', 'waiver_pitchers',
-                                          'categories', 'news', 'recent_form', 'two_start_pitchers'],
+    p.add_argument('--section',
+                   choices=['injuries', 'streaming', 'waivers', 'waiver_pitchers',
+                            'categories', 'news', 'recent_form', 'two_start_pitchers',
+                            'category_targets', 'trade_candidates'],
                    default=None, help='Run one section only (default: all)')
     p.add_argument('--days', type=int, default=3,
                    help='Days ahead to look for streaming starts (default: 3)')
