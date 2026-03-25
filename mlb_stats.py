@@ -9,6 +9,8 @@ import requests
 MLB_CACHE_FILE = '.mlb_cache.pkl'
 _cache = None
 _base_url = 'https://statsapi.mlb.com/api/v1'
+_player_cache = {}   # name -> {'id': int|None, 'team': str|None}
+_schedule_cache = {} # days -> raw schedule JSON
 
 
 def enable_cache():
@@ -53,16 +55,27 @@ def _normalize(name):
     return s.strip().lower()
 
 
-def _lookup_player_id(name):
-    """Look up player ID by name."""
+def _lookup_player(name):
+    """Return {'id', 'team'} for a player, cached to avoid repeat lookups."""
+    if name in _player_cache:
+        return _player_cache[name]
+    result = {'id': None, 'team': None}
     for query in [name, _normalize(name)]:
         try:
-            results = _api_get('lookup/players', {'lookupNames': query})
-            if results and len(results) > 0:
-                return results[0]['id']
+            data = _api_get('lookup/players', {'lookupNames': query})
+            if data and len(data) > 0:
+                p = data[0]
+                result['id'] = p.get('id')
+                result['team'] = p.get('currentTeam', {}).get('name', '')
+                break
         except Exception:
             pass
-    return None
+    _player_cache[name] = result
+    return result
+
+
+def _lookup_player_id(name):
+    return _lookup_player(name)['id']
 
 
 def get_transactions(days=3):
@@ -96,37 +109,40 @@ def get_transactions(days=3):
 def get_team_batting_stats():
     """
     Return {team_name: {avg, ops}} for all MLB teams this season.
-    Used to assess matchup difficulty for streaming pitchers.
+    Uses a single bulk /teams/stats call. Falls back to spring training
+    if regular season data isn't available yet (early season).
     """
-    data = _api_get('teams', {'sportId': 1})
-    result = {}
-    for team in data.get('teams', []):
-        tid = team['id']
-        name = team['name']
-        try:
-            stats = _api_get('teams/' + str(tid), {
-                'hydrate': 'stats(group=hitting,type=season)',
-            })
-            splits = (stats.get('teams', [{}])[0]
-                      .get('stats', [{}])[0]
-                      .get('splits', []))
-            if splits:
-                s = splits[0]['stat']
+    today = datetime.date.today()
+    for game_type in ('R', 'S'):  # regular season, then spring training
+        data = _api_get('teams/stats', {
+            'sportId': 1,
+            'group': 'hitting',
+            'gameType': game_type,
+            'season': today.year,
+            'stats': 'season',
+        })
+        splits = data.get('stats', [{}])[0].get('splits', []) if data.get('stats') else []
+        if not splits:
+            continue
+        result = {}
+        for split in splits:
+            name = split.get('team', {}).get('name', '')
+            s = split.get('stat', {})
+            if name:
                 obp = float(s.get('obp', 0) or 0)
                 slg = float(s.get('slg', 0) or 0)
                 result[name] = {
                     'avg': float(s.get('avg', 0) or 0),
                     'ops': obp + slg,
                 }
-        except Exception:
-            pass
-    return result
+        return result
+    return {}
 
 
-def get_schedule_density(days=7):
-    """
-    Return dict of {team_name: game_count} for the next N days.
-    """
+def _get_schedule_raw(days=7):
+    """Fetch schedule for next N days, cached in-memory for the process lifetime."""
+    if days in _schedule_cache:
+        return _schedule_cache[days]
     today = datetime.date.today()
     end = today + datetime.timedelta(days=days - 1)
     data = _api_get('schedule', {
@@ -134,6 +150,13 @@ def get_schedule_density(days=7):
         'endDate': end.strftime('%Y-%m-%d'),
         'sportId': 1,
     })
+    _schedule_cache[days] = data
+    return data
+
+
+def get_schedule_density(days=7):
+    """Return dict of {team_name: game_count} for the next N days."""
+    data = _get_schedule_raw(days)
     counts = {}
     for game in data.get('games', []):
         for side in ('home', 'away'):
@@ -144,24 +167,12 @@ def get_schedule_density(days=7):
 
 
 def get_player_teams(names):
-    """
-    Return {name: team_name} for each player in names.
-    Uses currentTeam from the MLB person endpoint.
-    """
+    """Return {name: team_name} for each player using cached lookup data."""
     result = {}
     for name in names:
-        pid = _lookup_player_id(name)
-        if pid is None:
-            continue
-        try:
-            data = _api_get('people/' + str(pid), {'hydrate': 'currentTeam'})
-            team = (data.get('people', [{}])[0]
-                    .get('currentTeam', {})
-                    .get('name', ''))
-            if team:
-                result[name] = team
-        except Exception:
-            pass
+        team = _lookup_player(name)['team']
+        if team:
+            result[name] = team
     return result
 
 
@@ -169,16 +180,16 @@ def get_probable_starters(days=3):
     """
     Return list of dicts for all probable starters over the next N days.
     Each dict: {name, team, opponent, date, home}
+    Fetches 7-day schedule (shared with get_schedule_density) and filters by window.
     """
     today = datetime.date.today()
-    end = today + datetime.timedelta(days=days - 1)
-    data = _api_get('schedule', {
-        'startDate': today.strftime('%Y-%m-%d'),
-        'endDate': end.strftime('%Y-%m-%d'),
-        'sportId': 1,
-    })
+    cutoff = today + datetime.timedelta(days=days - 1)
+    data = _get_schedule_raw(7)
     starters = []
     for game in data.get('games', []):
+        date_str = game.get('gameDateTime', '')[:10]
+        if date_str > cutoff.strftime('%Y-%m-%d'):
+            continue
         for side, opp in [('home', 'away'), ('away', 'home')]:
             pitcher = game.get(f'{side}ProbablePitcher', '')
             if pitcher:
@@ -186,17 +197,13 @@ def get_probable_starters(days=3):
                     'name': pitcher,
                     'team': game.get(f'{side}Team', {}).get('name', ''),
                     'opponent': game.get(f'{opp}Team', {}).get('name', ''),
-                    'date': game.get('gameDateTime', '')[:10],
+                    'date': date_str,
                     'home': side == 'home',
                 })
     return starters
 
 
-def get_pitcher_stats(names):
-    """
-    Return dict of name -> {era, whip, k9, ip, wins, saves, holds, qs} for season.
-    Only fetches for names provided; skips any that can't be found.
-    """
+def _fetch_pitcher_stats(names, stat_type):
     result = {}
     for name in names:
         pid = _lookup_player_id(name)
@@ -204,7 +211,7 @@ def get_pitcher_stats(names):
             continue
         try:
             data = _api_get('people/' + str(pid), {
-                'hydrate': 'stats(group=pitching,type=season)',
+                'hydrate': f'stats(group=pitching,type={stat_type})',
             })
             splits = (data.get('people', [{}])[0]
                       .get('stats', [{}])[0]
@@ -213,24 +220,21 @@ def get_pitcher_stats(names):
                 continue
             s = splits[0]['stat']
             result[name] = {
-                'era': float(s.get('era', 0) or 0),
-                'whip': float(s.get('whip', 0) or 0),
-                'k9': float(s.get('strikeoutsPer9Inn', 0) or 0),
-                'ip': float(s.get('inningsPitched', 0) or 0),
-                'wins': int(s.get('wins', 0) or 0),
+                'era':   float(s.get('era', 0) or 0),
+                'whip':  float(s.get('whip', 0) or 0),
+                'k9':    float(s.get('strikeoutsPer9Inn', 0) or 0),
+                'ip':    float(s.get('inningsPitched', 0) or 0),
+                'wins':  int(s.get('wins', 0) or 0),
                 'saves': int(s.get('saves', 0) or 0),
                 'holds': int(s.get('holds', 0) or 0),
-                'qs': int(s.get('qualityStarts', 0) or 0),
+                'qs':    int(s.get('qualityStarts', 0) or 0),
             }
         except Exception:
             pass
     return result
 
 
-def get_batter_stats(names):
-    """
-    Return dict of name -> {avg, obp, slg, hr, rbi, r, sb, bb, pa} for season.
-    """
+def _fetch_batter_stats(names, stat_type):
     result = {}
     for name in names:
         pid = _lookup_player_id(name)
@@ -238,43 +242,7 @@ def get_batter_stats(names):
             continue
         try:
             data = _api_get('people/' + str(pid), {
-                'hydrate': 'stats(group=hitting,type=season)',
-            })
-            splits = (data.get('people', [{}])[0]
-                      .get('stats', [{}])[0]
-                      .get('splits', []))
-            if not splits:
-                continue
-            s = splits[0]['stat']
-            result[name] = {
-                'avg': float(s.get('avg', 0) or 0),
-                'obp': float(s.get('obp', 0) or 0),
-                'slg': float(s.get('slg', 0) or 0),
-                'hr': int(s.get('homeRuns', 0) or 0),
-                'rbi': int(s.get('rbi', 0) or 0),
-                'r': int(s.get('runs', 0) or 0),
-                'sb': int(s.get('stolenBases', 0) or 0),
-                'bb': int(s.get('baseOnBalls', 0) or 0),
-                'pa': int(s.get('plateAppearances', 0) or 0),
-            }
-        except Exception:
-            pass
-    return result
-
-
-def get_recent_batter_stats(names):
-    """
-    Return dict of name -> {avg, obp, slg, hr, rbi, r, sb, bb, pa}
-    for the last 14 days. Same shape as get_batter_stats for easy delta computation.
-    """
-    result = {}
-    for name in names:
-        pid = _lookup_player_id(name)
-        if pid is None:
-            continue
-        try:
-            data = _api_get('people/' + str(pid), {
-                'hydrate': 'stats(group=hitting,type=last14)',
+                'hydrate': f'stats(group=hitting,type={stat_type})',
             })
             splits = (data.get('people', [{}])[0]
                       .get('stats', [{}])[0]
@@ -298,36 +266,17 @@ def get_recent_batter_stats(names):
     return result
 
 
+def get_pitcher_stats(names):
+    return _fetch_pitcher_stats(names, 'season')
+
+
 def get_recent_pitcher_stats(names):
-    """
-    Return dict of name -> {era, whip, k9, ip, wins, saves, holds, qs}
-    for the last 14 days. Same shape as get_pitcher_stats for easy delta computation.
-    """
-    result = {}
-    for name in names:
-        pid = _lookup_player_id(name)
-        if pid is None:
-            continue
-        try:
-            data = _api_get('people/' + str(pid), {
-                'hydrate': 'stats(group=pitching,type=last14)',
-            })
-            splits = (data.get('people', [{}])[0]
-                      .get('stats', [{}])[0]
-                      .get('splits', []))
-            if not splits:
-                continue
-            s = splits[0]['stat']
-            result[name] = {
-                'era':   float(s.get('era', 0) or 0),
-                'whip':  float(s.get('whip', 0) or 0),
-                'k9':    float(s.get('strikeoutsPer9Inn', 0) or 0),
-                'ip':    float(s.get('inningsPitched', 0) or 0),
-                'wins':  int(s.get('wins', 0) or 0),
-                'saves': int(s.get('saves', 0) or 0),
-                'holds': int(s.get('holds', 0) or 0),
-                'qs':    int(s.get('qualityStarts', 0) or 0),
-            }
-        except Exception:
-            pass
-    return result
+    return _fetch_pitcher_stats(names, 'last14')
+
+
+def get_batter_stats(names):
+    return _fetch_batter_stats(names, 'season')
+
+
+def get_recent_batter_stats(names):
+    return _fetch_batter_stats(names, 'last14')

@@ -53,11 +53,14 @@ def analyze(lg, section=None, days=3, progress=None):
     tm = lg.to_team(lg.team_key())
     roster = tm.roster(day=datetime.date.today())
 
+    _prog("Fetching waiver wire...")
+    waiver_players = lg.waivers()
+
     runners = {
         'injuries':           lambda: _injuries(roster),
-        'streaming':          lambda: _streaming(lg, roster, days, _prog),
-        'waivers':            lambda: _waivers(lg, roster, _prog),
-        'waiver_pitchers':    lambda: _waiver_pitchers(lg, _prog),
+        'streaming':          lambda: _streaming(lg, roster, days, waiver_players, _prog),
+        'waivers':            lambda: _waivers(lg, roster, waiver_players, _prog),
+        'waiver_pitchers':    lambda: _waiver_pitchers(lg, waiver_players, _prog),
         'categories':         lambda: _categories(lg),
         'news':               lambda: _news(roster, _prog),
         'recent_form':        lambda: _recent_form(roster, _prog),
@@ -78,7 +81,7 @@ def analyze(lg, section=None, days=3, progress=None):
             )}
         if section == 'trade_candidates':
             return {'trade_candidates': _trade_candidates(
-                runners['recent_form'](), runners['waivers'](),
+                runners['recent_form'](), runners['waivers'](), runners['categories'](),
             )}
         return {section: runners[section]()}
 
@@ -93,7 +96,7 @@ def analyze(lg, section=None, days=3, progress=None):
     )
     _prog("Running trade_candidates analysis...")
     results['trade_candidates'] = _trade_candidates(
-        results['recent_form'], results['waivers'],
+        results['recent_form'], results['waivers'], results['categories'],
     )
     return results
 
@@ -158,7 +161,7 @@ def _injuries(roster):
 # Section: streaming
 # ---------------------------------------------------------------------------
 
-def _streaming(lg, roster, days, progress=None):
+def _streaming(lg, roster, days, waiver_players, progress=None):
     """
     Returns:
       targets      - ranked list of available pitchers with upcoming starts
@@ -187,7 +190,7 @@ def _streaming(lg, roster, days, progress=None):
     available = {}
     for p in lg.free_agents('P'):
         available[p['name']] = {'source': 'FA', **p}
-    for p in lg.waivers():
+    for p in waiver_players:
         pos = p.get('eligible_positions', [])
         if any(x in pos for x in ('SP', 'RP', 'P')):
             available[p['name']] = {'source': 'W', **p}
@@ -243,7 +246,7 @@ def _streaming(lg, roster, days, progress=None):
 # Section: waivers
 # ---------------------------------------------------------------------------
 
-def _waivers(lg, roster, progress=None):
+def _waivers(lg, roster, waiver_players, progress=None):
     """
     Returns dict keyed by position. Each value is a list of upgrade dicts:
       candidate  - {name, player_id, source, percent_owned, stats}
@@ -263,14 +266,18 @@ def _waivers(lg, roster, progress=None):
         if slot in ACTIVE_BATTER_SLOTS:
             starters_by_pos.setdefault(slot, []).append(p)
 
+    # Pre-index waiver players by position to avoid re-iterating per position
+    waivers_by_pos = {}
+    for p in waiver_players:
+        for pos in p.get('eligible_positions', []):
+            waivers_by_pos.setdefault(pos, []).append(p)
+
     results = {}
 
     for pos in BATTER_POSITIONS:
         _p(f"Checking {pos} free agents...")
         candidates = list(lg.free_agents(pos))
-        for p in lg.waivers():
-            if pos in p.get('eligible_positions', []):
-                candidates.append(p)
+        candidates.extend(waivers_by_pos.get(pos, []))
 
         # Rank by percent_owned, evaluate top 10 only to limit API calls
         candidates.sort(key=lambda p: p.get('percent_owned', 0), reverse=True)
@@ -323,7 +330,7 @@ def _waivers(lg, roster, progress=None):
     return results
 
 
-def _waiver_pitchers(lg, progress=None):
+def _waiver_pitchers(lg, waiver_players, progress=None):
     """
     Returns list of available RP/closer targets ranked by saves + holds.
     Each dict: {name, player_id, source, percent_owned, stats, sv_hld}
@@ -335,7 +342,7 @@ def _waiver_pitchers(lg, progress=None):
     candidates = {}
     for p in lg.free_agents('RP'):
         candidates[p['name']] = {'source': 'FA', **p}
-    for p in lg.waivers():
+    for p in waiver_players:
         if 'RP' in p.get('eligible_positions', []):
             candidates[p['name']] = {'source': 'W', **p}
 
@@ -380,16 +387,20 @@ def _batter_summary(player, stats):
 # ---------------------------------------------------------------------------
 
 LOWER_IS_BETTER = {'ERA', 'WHIP'}
+_stat_id_map_cache = {}
 
 
 def _build_stat_id_map(lg):
-    """Return {stat_id_str: display_name} from league settings."""
+    """Return {stat_id_str: display_name} from league settings, cached per league."""
+    if lg.league_id in _stat_id_map_cache:
+        return _stat_id_map_cache[lg.league_id]
     import objectpath
     t = objectpath.Tree(lg.yhandler.get_settings_raw(lg.league_id))
     mapping = {}
     for s in t.execute('$..stat_categories..stat'):
         if 'stat_id' in s and 'display_name' in s:
             mapping[str(s['stat_id'])] = s['display_name']
+    _stat_id_map_cache[lg.league_id] = mapping
     return mapping
 
 
@@ -760,7 +771,21 @@ _CAT_BATTER = {'R': 'r', 'HR': 'hr', 'RBI': 'rbi', 'SB': 'sb',
                 'AVG': 'avg', 'OBP': 'obp', 'SLG': 'slg', 'BB': 'bb'}
 _CAT_PITCHER = {'W': 'wins', 'SV': 'saves', 'K': 'k9', 'QS': 'qs',
                 'ERA': 'era', 'WHIP': 'whip', 'HLD': 'holds'}
-_CONCEDE_PCT = 0.20   # losing by >20% of opponent value → concede
+
+
+def _concede_threshold():
+    """
+    Tighten the concede threshold as the week progresses.
+    Mon=0 ... Sun=6; Yahoo weeks typically run Mon-Sun.
+    Early week: more can be chased. Late week: less time to close gaps.
+    """
+    day = datetime.date.today().weekday()  # Mon=0, Sun=6
+    if day <= 1:   # Mon-Tue: 6-7 days left
+        return 0.25
+    elif day <= 3: # Wed-Thu: 3-5 days left
+        return 0.20
+    else:          # Fri-Sun: 1-2 days left
+        return 0.10
 
 
 def _category_targets(categories_result, waivers_result, waiver_pitchers_result):
@@ -778,6 +803,7 @@ def _category_targets(categories_result, waivers_result, waiver_pitchers_result)
 
     cats = categories_result.get('cats', [])
     chase, protect, concede = [], [], []
+    concede_pct = _concede_threshold()
 
     # Pre-index top waiver batter by each stat for quick lookup
     best_waiver_batter = {}  # stat_key -> (name, value)
@@ -824,7 +850,7 @@ def _category_targets(categories_result, waivers_result, waiver_pitchers_result)
             'gap_pct':  round(gap_pct, 3),
         }
 
-        if gap_pct > _CONCEDE_PCT:
+        if gap_pct > concede_pct:
             concede.append(entry_base)
         else:
             # Chase — find best matching waiver target
@@ -850,39 +876,59 @@ _SELL_HIGH_ERA   = -1.50    # recent ERA delta below this → sell-high candidat
 _BUY_LOW_OPS_SEASON = 0.750  # season OPS must be at least this to be a true buy-low
 
 
-def _trade_candidates(recent_form_result, waivers_result):
+def _trade_candidates(recent_form_result, waivers_result, categories_result=None):
     """
     Derives sell-high and buy-low trade suggestions from recent_form and waivers.
 
-    sell_high: your roster players with extreme positive recent form (likely to regress)
-    buy_low:   waiver targets whose season stats are strong but who are in a slump
+    sell_high: your roster players with extreme positive recent form (likely to regress),
+               skipping anyone whose hot stat contributes to a category you're losing.
+    buy_low:   waiver targets with strong season OPS (>= threshold) and some ownership,
+               indicating market undervaluation rather than permanent decline.
 
     Returns:
       sell_high - [{'player_name', 'player_id', 'reason', 'ops_delta' or 'era_delta'}]
       buy_low   - [{'player_name', 'player_id', 'reason', 'season_ops', 'recent_ops'}]
     """
+    # Categories you're currently losing — don't sell players contributing to these
+    losing_cats = set()
+    if categories_result and 'cats' in categories_result:
+        losing_cats = {c['category'] for c in categories_result['cats'] if not c['winning']}
+
+    # Reverse maps: stat_key -> category name
+    _STAT_TO_CAT_BATTER  = {v: k for k, v in _CAT_BATTER.items()}
+    _STAT_TO_CAT_PITCHER = {v: k for k, v in _CAT_PITCHER.items()}
+
     sell_high = []
     if isinstance(recent_form_result, dict):
         for p in recent_form_result.get('hot_batters', []):
-            if p['ops_delta'] >= _SELL_HIGH_OPS:
-                sell_high.append({
-                    'player_name': p['player_name'],
-                    'player_id':   p['player_id'],
-                    'reason':      f"OPS {p['recent_ops']:.3f} last 14d vs {p['season_ops']:.3f} season (+{p['ops_delta']:.3f}) — likely to regress",
-                    'ops_delta':   p['ops_delta'],
-                })
+            if p['ops_delta'] < _SELL_HIGH_OPS:
+                continue
+            # Skip if their core stats help categories you're losing
+            batter_cats = {'AVG', 'OBP', 'R', 'HR', 'RBI', 'SB', 'BB'}
+            if batter_cats & losing_cats:
+                continue
+            sell_high.append({
+                'player_name': p['player_name'],
+                'player_id':   p['player_id'],
+                'reason':      f"OPS {p['recent_ops']:.3f} last 14d vs {p['season_ops']:.3f} season (+{p['ops_delta']:.3f}) — likely to regress",
+                'ops_delta':   p['ops_delta'],
+            })
         for p in recent_form_result.get('hot_pitchers', []):
-            if p['era_delta'] <= _SELL_HIGH_ERA:
-                sell_high.append({
-                    'player_name': p['player_name'],
-                    'player_id':   p['player_id'],
-                    'reason':      f"ERA {p['recent_era']:.2f} last 14d vs {p['season_era']:.2f} season ({p['era_delta']:.2f}) — may not sustain",
-                    'era_delta':   p['era_delta'],
-                })
+            if p['era_delta'] > _SELL_HIGH_ERA:
+                continue
+            pitcher_cats = {'ERA', 'WHIP', 'W', 'K', 'QS', 'SV', 'HLD'}
+            if pitcher_cats & losing_cats:
+                continue
+            sell_high.append({
+                'player_name': p['player_name'],
+                'player_id':   p['player_id'],
+                'reason':      f"ERA {p['recent_era']:.2f} last 14d vs {p['season_era']:.2f} season ({p['era_delta']:.2f}) — may not sustain",
+                'era_delta':   p['era_delta'],
+            })
 
     sell_high.sort(key=lambda x: -x.get('ops_delta', -x.get('era_delta', 0)))
 
-    # Buy-low: waiver upgrade candidates with strong season OPS but depressed recent form
+    # Buy-low: waiver candidates with strong season OPS and meaningful ownership
     buy_low = []
     if isinstance(waivers_result, dict):
         seen = set()
@@ -896,14 +942,14 @@ def _trade_candidates(recent_form_result, waivers_result):
                 season_ops = (cs.get('obp', 0) or 0) + (cs.get('slg', 0) or 0)
                 if season_ops < _BUY_LOW_OPS_SEASON:
                     continue
-                # A waiver candidate is already "available" — if their season stats are
-                # strong, they're a buy-low by definition (undervalued by the market)
+                if c.get('percent_owned', 0) < 5:
+                    continue  # skip complete unknowns
                 seen.add(name)
                 buy_low.append({
-                    'player_name': name,
-                    'player_id':   c['player_id'],
-                    'reason':      f"Season OPS {season_ops:.3f} but available on waivers — undervalued",
-                    'season_ops':  round(season_ops, 3),
+                    'player_name':   name,
+                    'player_id':     c['player_id'],
+                    'reason':        f"Season OPS {season_ops:.3f} but available on waivers — undervalued",
+                    'season_ops':    round(season_ops, 3),
                     'percent_owned': c.get('percent_owned', 0),
                 })
 
