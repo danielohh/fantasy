@@ -235,6 +235,10 @@ def cmd_advise(args):
     _header("AI ADVISOR")
     prompt = _build_advise_prompt(results)
 
+    if getattr(args, 'print_prompt', False):
+        print(prompt)
+        return
+
     if os.environ.get('ANTHROPIC_API_KEY'):
         _advise_claude(prompt)
     elif os.environ.get('GOOGLE_API_KEY'):
@@ -553,7 +557,7 @@ def _advise_gemini(prompt):
         tools=[types.Tool(google_search=types.GoogleSearch())],
     )
     for chunk in client.models.generate_content_stream(
-        model='gemini-2.5-flash', contents=full_prompt, config=config,
+        model='gemini-2.5-pro', contents=full_prompt, config=config,
     ):
         if chunk.text:
             print(chunk.text, end='', flush=True)
@@ -584,7 +588,7 @@ def _get_advise_text_gemini(prompt):
         tools=[types.Tool(google_search=types.GoogleSearch())],
     )
     response = client.models.generate_content(
-        model='gemini-2.5-flash', contents=full_prompt, config=config,
+        model='gemini-2.5-pro', contents=full_prompt, config=config,
     )
     return response.text
 
@@ -1106,6 +1110,7 @@ def main():
     p.set_defaults(func=cmd_clear_cache)
 
     p = sub.add_parser('advise', help='AI-powered recommendations based on full analysis')
+    p.add_argument('--print-prompt', action='store_true', help='Print the AI prompt and exit without calling any model')
     p.set_defaults(func=cmd_advise)
 
     p = sub.add_parser('analyze', help='Roster analysis, streaming targets, waiver pickups')
