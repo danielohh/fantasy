@@ -204,6 +204,7 @@ def get_probable_starters(days=3):
 
 
 def _fetch_pitcher_stats(names, stat_type):
+    year = datetime.date.today().year
     result = {}
     for name in names:
         pid = _lookup_player_id(name)
@@ -211,7 +212,7 @@ def _fetch_pitcher_stats(names, stat_type):
             continue
         try:
             data = _api_get('people/' + str(pid), {
-                'hydrate': f'stats(group=pitching,type={stat_type})',
+                'hydrate': f'stats(group=pitching,type={stat_type},season={year})',
             })
             splits = (data.get('people', [{}])[0]
                       .get('stats', [{}])[0]
@@ -235,6 +236,7 @@ def _fetch_pitcher_stats(names, stat_type):
 
 
 def _fetch_batter_stats(names, stat_type):
+    year = datetime.date.today().year
     result = {}
     for name in names:
         pid = _lookup_player_id(name)
@@ -242,7 +244,7 @@ def _fetch_batter_stats(names, stat_type):
             continue
         try:
             data = _api_get('people/' + str(pid), {
-                'hydrate': f'stats(group=hitting,type={stat_type})',
+                'hydrate': f'stats(group=hitting,type={stat_type},season={year})',
             })
             splits = (data.get('people', [{}])[0]
                       .get('stats', [{}])[0]

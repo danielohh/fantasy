@@ -1,3 +1,4 @@
+import datetime
 import os
 import pickle
 
@@ -15,7 +16,19 @@ def get_league(oauth_file=None, cache=False):
     ids = gm.league_ids(game_codes=['mlb'])
     if not ids:
         raise RuntimeError('No MLB leagues found')
-    lg = gm.to_league(ids[0])
+    current_year = str(datetime.date.today().year)
+    current_id = None
+    for lid in ids:
+        try:
+            candidate = gm.to_league(lid)
+            if str(candidate.settings().get('season')) == current_year:
+                current_id = lid
+                break
+        except Exception:
+            pass
+    if current_id is None:
+        raise RuntimeError(f'No MLB league found for {current_year}')
+    lg = gm.to_league(current_id)
     if cache:
         _patch_cache(lg.yhandler)
     return lg
