@@ -767,6 +767,14 @@ def _two_start_pitchers(roster, progress=None):
 # ---------------------------------------------------------------------------
 
 # Map Yahoo H2H category display names to batter/pitcher stat keys
+# Minimum absolute gap required before a category can be conceded.
+# Prevents "0 vs 1 = 100% behind" from triggering concede early in the week.
+_MIN_CONCEDE_GAP = {
+    'R': 4, 'HR': 3, 'RBI': 4, 'SB': 3, 'BB': 4,
+    'K': 10, 'W': 2, 'SV': 3, 'HLD': 3, 'QS': 2, 'IP': 8,
+    'AVG': 0.040, 'OBP': 0.060, 'SLG': 0.060,
+}
+
 _CAT_BATTER = {'R': 'r', 'HR': 'hr', 'RBI': 'rbi', 'SB': 'sb',
                 'AVG': 'avg', 'OBP': 'obp', 'SLG': 'slg', 'BB': 'bb'}
 _CAT_PITCHER = {'W': 'wins', 'SV': 'saves', 'K': 'k9', 'QS': 'qs',
@@ -850,7 +858,9 @@ def _category_targets(categories_result, waivers_result, waiver_pitchers_result)
             'gap_pct':  round(gap_pct, 3),
         }
 
-        if gap_pct > concede_pct:
+        abs_gap = abs(theirs - mine)
+        min_gap = _MIN_CONCEDE_GAP.get(cat, 0)
+        if gap_pct > concede_pct and abs_gap >= min_gap:
             concede.append(entry_base)
         else:
             # Chase — find best matching waiver target
