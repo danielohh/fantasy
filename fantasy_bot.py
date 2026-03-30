@@ -384,7 +384,14 @@ def cmd_email_report(args):
                 ha      = _badge('Home', '#fff', '#27ae60') if s['home'] else _badge('Away', '#555', '#ddd')
                 opp_ops = f'  <span style="{muted}">OppOPS {s["opp_ops"]:.3f}</span>' if s.get('opp_ops') else ''
                 starts_html += f'{s["date"]} vs {s["opponent"]} {ha}{opp_ops}<br>'
-            rows.append([f'<strong>{p["player_name"]}</strong>', starts_html.rstrip('<br>')])
+            slot = p.get('slot', '')
+            if slot == 'FA':
+                src_badge = _badge('FA', '#fff', '#e67e22')
+            elif slot == 'W':
+                src_badge = _badge('W', '#fff', '#8e44ad')
+            else:
+                src_badge = ''
+            rows.append([f'<strong>{p["player_name"]}</strong> {src_badge}', starts_html.rstrip('<br>')])
         html.append(_table(['Pitcher', 'Starts'], rows))
     else:
         html.append(none_msg)
@@ -752,7 +759,7 @@ def _build_advise_prompt(results):
 
     two_start = results.get('two_start_pitchers', [])
     if two_start:
-        lines.append('\nTWO-START PITCHERS ON YOUR ROSTER (next 7 days):')
+        lines.append('\nTWO-START PITCHERS (next 7 days — roster + available streamers):')
         for p in two_start:
             opps = ', '.join(
                 f"vs {s['opponent']} ({'home' if s['home'] else 'away'})"
@@ -907,11 +914,11 @@ def _print_recent_form(data):
 def _print_two_start_pitchers(data):
     _header("TWO-START PITCHERS (next 7 days)")
     if not data:
-        print("  No pitchers on your roster with 2+ starts this week.")
+        print("  No pitchers with 2+ starts this week.")
         return
     for p in data:
         starts = p['starts']
-        print(f"  {p['player_name']:<25} (slot {p['slot']}) — {len(starts)} starts:")
+        print(f"  {p['player_name']:<25} ({p['slot']:<4}) — {len(starts)} starts:")
         for s in starts:
             ha      = 'home' if s['home'] else 'away'
             opp_ops = f"  OppOPS {s['opp_ops']:.3f}" if s.get('opp_ops') else ''

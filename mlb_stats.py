@@ -145,11 +145,14 @@ def _get_schedule_raw(days=7):
         return _schedule_cache[days]
     today = datetime.date.today()
     end = today + datetime.timedelta(days=days - 1)
-    data = _api_get('schedule', {
+    raw = _api_get('schedule', {
         'startDate': today.strftime('%Y-%m-%d'),
         'endDate': end.strftime('%Y-%m-%d'),
         'sportId': 1,
+        'hydrate': 'probablePitcher',
     })
+    games = [g for d in raw.get('dates', []) for g in d.get('games', [])]
+    data = {'games': games}
     _schedule_cache[days] = data
     return data
 
@@ -159,8 +162,9 @@ def get_schedule_density(days=7):
     data = _get_schedule_raw(days)
     counts = {}
     for game in data.get('games', []):
+        teams = game.get('teams', {})
         for side in ('home', 'away'):
-            team = game.get(f'{side}Team', {}).get('name', '')
+            team = teams.get(side, {}).get('team', {}).get('name', '')
             if team:
                 counts[team] = counts.get(team, 0) + 1
     return counts
@@ -187,16 +191,18 @@ def get_probable_starters(days=3):
     data = _get_schedule_raw(7)
     starters = []
     for game in data.get('games', []):
-        date_str = game.get('gameDateTime', '')[:10]
+        date_str = game.get('gameDate', game.get('gameDateTime', ''))[:10]
         if date_str > cutoff.strftime('%Y-%m-%d'):
             continue
+        teams = game.get('teams', {})
         for side, opp in [('home', 'away'), ('away', 'home')]:
-            pitcher = game.get(f'{side}ProbablePitcher', '')
+            probable = teams.get(side, {}).get('probablePitcher', {})
+            pitcher = probable.get('fullName', '') if isinstance(probable, dict) else ''
             if pitcher:
                 starters.append({
                     'name': pitcher,
-                    'team': game.get(f'{side}Team', {}).get('name', ''),
-                    'opponent': game.get(f'{opp}Team', {}).get('name', ''),
+                    'team': teams.get(side, {}).get('team', {}).get('name', ''),
+                    'opponent': teams.get(opp, {}).get('team', {}).get('name', ''),
                     'date': date_str,
                     'home': side == 'home',
                 })
