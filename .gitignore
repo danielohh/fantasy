@@ -10,5 +10,8 @@ __pycache__/
 *.pyc
 .venv/
 
+# Tests
+test_*.py
+
 # Environment variables
 .env

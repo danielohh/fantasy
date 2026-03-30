@@ -212,6 +212,11 @@ def get_probable_starters(days=3):
 
 def _fetch_pitcher_stats(names, stat_type):
     year = datetime.date.today().year
+    # season param must be inside the hydrate string for pitching stats
+    if stat_type == 'season':
+        hydrate_type = 'statsSingleSeason'
+    else:
+        hydrate_type = 'lastXGames'
     result = {}
     for name in names:
         pid = _lookup_player_id(name)
@@ -219,7 +224,7 @@ def _fetch_pitcher_stats(names, stat_type):
             continue
         try:
             data = _api_get('people/' + str(pid), {
-                'hydrate': f'stats(group=pitching,type={stat_type},season={year})',
+                'hydrate': f'stats(group=pitching,type={hydrate_type},season={year})',
             })
             splits = (data.get('people', [{}])[0]
                       .get('stats', [{}])[0]
@@ -244,6 +249,10 @@ def _fetch_pitcher_stats(names, stat_type):
 
 def _fetch_batter_stats(names, stat_type):
     year = datetime.date.today().year
+    if stat_type == 'season':
+        hydrate_type = 'statsSingleSeason'
+    else:
+        hydrate_type = 'lastXGames'
     result = {}
     for name in names:
         pid = _lookup_player_id(name)
@@ -251,7 +260,8 @@ def _fetch_batter_stats(names, stat_type):
             continue
         try:
             data = _api_get('people/' + str(pid), {
-                'hydrate': f'stats(group=hitting,type={stat_type},season={year})',
+                'hydrate': f'stats(group=hitting,type={hydrate_type})',
+                'season':  year,
             })
             splits = (data.get('people', [{}])[0]
                       .get('stats', [{}])[0]
