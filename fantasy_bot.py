@@ -550,18 +550,27 @@ def _advise_claude(prompt):
 def _advise_gemini(prompt):
     from google import genai
     from google.genai import types
-    import os
+    import os, time
     client = genai.Client(api_key=os.environ['GOOGLE_API_KEY'])
     full_prompt = 'You are a concise fantasy baseball expert. Give actionable advice only.\n\n' + prompt
     config = types.GenerateContentConfig(
         tools=[types.Tool(google_search=types.GoogleSearch())],
     )
-    for chunk in client.models.generate_content_stream(
-        model='gemini-2.5-pro', contents=full_prompt, config=config,
-    ):
-        if chunk.text:
-            print(chunk.text, end='', flush=True)
-    print()
+    for attempt in range(3):
+        try:
+            for chunk in client.models.generate_content_stream(
+                model='gemini-2.5-pro', contents=full_prompt, config=config,
+            ):
+                if chunk.text:
+                    print(chunk.text, end='', flush=True)
+            print()
+            return
+        except Exception as e:
+            if attempt < 2:
+                print(f"\n  [Gemini error: {e}] Retrying in 30s... (attempt {attempt + 2}/3)")
+                time.sleep(30)
+            else:
+                raise
 
 
 def _get_advise_text_claude(prompt):
@@ -582,15 +591,24 @@ def _get_advise_text_gemini(prompt):
     """Get advice text from Gemini without printing."""
     from google import genai
     from google.genai import types
+    import time
     client = genai.Client(api_key=os.environ['GOOGLE_API_KEY'])
     full_prompt = 'You are a concise fantasy baseball expert. Give actionable advice only.\n\n' + prompt
     config = types.GenerateContentConfig(
         tools=[types.Tool(google_search=types.GoogleSearch())],
     )
-    response = client.models.generate_content(
-        model='gemini-2.5-pro', contents=full_prompt, config=config,
-    )
-    return response.text
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(
+                model='gemini-2.5-pro', contents=full_prompt, config=config,
+            )
+            return response.text
+        except Exception as e:
+            if attempt < 2:
+                print(f"  [Gemini error: {e}] Retrying in 30s... (attempt {attempt + 2}/3)")
+                time.sleep(30)
+            else:
+                raise
 
 
 def _build_advise_prompt(results):
