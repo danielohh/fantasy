@@ -566,7 +566,7 @@ def _advise_gemini(prompt):
     for attempt in range(3):
         try:
             for chunk in client.models.generate_content_stream(
-                model='gemini-2.5-pro', contents=full_prompt, config=config,
+                model='gemini-2.5-flash', contents=full_prompt, config=config,
             ):
                 if chunk.text:
                     print(chunk.text, end='', flush=True)
@@ -608,7 +608,7 @@ def _get_advise_text_gemini(prompt):
         try:
             chunks = []
             for chunk in client.models.generate_content_stream(
-                model='gemini-2.5-pro', contents=full_prompt, config=config,
+                model='gemini-2.5-flash', contents=full_prompt, config=config,
             ):
                 if chunk.text:
                     chunks.append(chunk.text)
