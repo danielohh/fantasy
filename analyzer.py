@@ -234,7 +234,7 @@ def _streaming(lg, roster, days, waiver_players, progress=None):
             'slot':        p['selected_position'],
         }
         for p in roster
-        if p['selected_position'] in ACTIVE_PITCHER_SLOTS
+        if p['selected_position'] in ('SP', 'P')
         and p['name'] not in probable_names
         and p.get('status', '') not in INJURY_STATUSES
     ]
@@ -356,7 +356,7 @@ def _waiver_pitchers(lg, waiver_players, progress=None):
     results = []
     for c in top:
         cs = cand_stats.get(c['name'], {})
-        if not cs or cs.get('ip', 0) < 5:
+        if not cs:
             continue
         sv_hld = cs.get('saves', 0) + cs.get('holds', 0)
         results.append({
@@ -468,15 +468,21 @@ def _categories(lg):
                 theirs = float(theirs or 0)
             except (TypeError, ValueError):
                 continue
-            if display_name in LOWER_IS_BETTER:
+            if mine == theirs:
+                winning = False
+                tied = True
+            elif display_name in LOWER_IS_BETTER:
                 winning = mine < theirs
+                tied = False
             else:
                 winning = mine > theirs
+                tied = False
             cats.append({
                 'category': display_name,
                 'mine':     mine,
                 'theirs':   theirs,
                 'winning':  winning,
+                'tied':     tied,
             })
 
         return {
@@ -849,7 +855,7 @@ def _category_targets(categories_result, waivers_result, waiver_pitchers_result)
         mine  = float(c['mine']   or 0)
         theirs = float(c['theirs'] or 0)
 
-        if c['winning']:
+        if c['winning'] or c.get('tied'):
             protect.append({'category': cat, 'mine': mine, 'theirs': theirs})
             continue
 

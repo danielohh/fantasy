@@ -695,7 +695,7 @@ def _build_advise_prompt(results):
             f"leading {cats.get('leading',0)}/{len(cat_list)}"
         )
         for c in cat_list:
-            result = 'WIN' if c['winning'] else 'LOSE'
+            result = 'WIN' if c['winning'] else ('TIE' if c.get('tied') else 'LOSE')
             lines.append(f"  {c['category']:<6} {str(c.get('mine','?')):>8} vs {str(c.get('theirs','?')):<8}  {result}")
 
     news = results.get('news', {})
@@ -1034,7 +1034,7 @@ def _print_categories(data):
     print(f"  {'Cat':<6} {'Yours':>8} {'Theirs':>8}  Result")
     print(f"  {'-'*35}")
     for c in cats:
-        result = 'WIN' if c['winning'] else 'lose'
+        result = 'WIN' if c['winning'] else ('tie' if c.get('tied') else 'lose')
         print(f"  {c['category']:<6} {str(c['mine']):>8} {str(c['theirs']):>8}  {result}")
 
 
