@@ -62,9 +62,10 @@ def _lookup_player(name):
     result = {'id': None, 'team': None}
     for query in [name, _normalize(name)]:
         try:
-            data = _api_get('lookup/players', {'lookupNames': query})
-            if data and len(data) > 0:
-                p = data[0]
+            data = _api_get('people/search', {'names': query, 'hydrate': 'currentTeam'})
+            people = data.get('people', []) if isinstance(data, dict) else []
+            if people:
+                p = people[0]
                 result['id'] = p.get('id')
                 result['team'] = p.get('currentTeam', {}).get('name', '')
                 break
