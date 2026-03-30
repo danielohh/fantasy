@@ -800,7 +800,8 @@ def _build_advise_prompt(results):
 
     lines.append(
         '\nGive me 2-3 specific moves, prioritized by: (1) impact on this week\'s matchup, '
-        'then (2) roster improvement. One sentence per move. No preamble.'
+        'then (2) roster improvement. One sentence per move. No preamble. '
+        'For every add, specify who to drop.'
     )
     return '\n'.join(lines)
 
