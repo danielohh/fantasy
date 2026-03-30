@@ -64,7 +64,7 @@ def analyze(lg, section=None, days=3, progress=None):
         'categories':         lambda: _categories(lg),
         'news':               lambda: _news(roster, _prog),
         'recent_form':        lambda: _recent_form(roster, _prog),
-        'two_start_pitchers': lambda: _two_start_pitchers(roster, _prog),
+        'two_start_pitchers': lambda: _two_start_pitchers(roster, lg, waiver_players, _prog),
         'standings':          lambda: _standings(lg),
     }
 
@@ -234,7 +234,7 @@ def _streaming(lg, roster, days, waiver_players, progress=None):
             'slot':        p['selected_position'],
         }
         for p in roster
-        if p['selected_position'] in ACTIVE_PITCHER_SLOTS
+        if p['selected_position'] in ('SP', 'P')
         and p['name'] not in probable_names
         and p.get('status', '') not in INJURY_STATUSES
     ]
@@ -356,7 +356,7 @@ def _waiver_pitchers(lg, waiver_players, progress=None):
     results = []
     for c in top:
         cs = cand_stats.get(c['name'], {})
-        if not cs or cs.get('ip', 0) < 5:
+        if not cs:
             continue
         sv_hld = cs.get('saves', 0) + cs.get('holds', 0)
         results.append({
@@ -468,15 +468,21 @@ def _categories(lg):
                 theirs = float(theirs or 0)
             except (TypeError, ValueError):
                 continue
-            if display_name in LOWER_IS_BETTER:
+            if mine == theirs:
+                winning = False
+                tied = True
+            elif display_name in LOWER_IS_BETTER:
                 winning = mine < theirs
+                tied = False
             else:
                 winning = mine > theirs
+                tied = False
             cats.append({
                 'category': display_name,
                 'mine':     mine,
                 'theirs':   theirs,
                 'winning':  winning,
+                'tied':     tied,
             })
 
         return {
@@ -710,9 +716,9 @@ def _recent_form(roster, progress=None):
 # Section: two_start_pitchers
 # ---------------------------------------------------------------------------
 
-def _two_start_pitchers(roster, progress=None):
+def _two_start_pitchers(roster, lg, waiver_players, progress=None):
     """
-    Returns list of your active roster pitchers with 2+ starts in the next 7 days.
+    Returns list of pitchers (on roster or available as FA/waiver) with 2+ starts in the next 7 days.
     Each dict: {player_name, player_id, slot, starts: [{date, opponent, home, opp_ops}]}
     Sorted by number of starts descending, then player name.
     """
@@ -720,12 +726,24 @@ def _two_start_pitchers(roster, progress=None):
         if progress: progress(msg)
 
     active_pitchers = {
-        p['name']: p for p in roster
+        p['name']: {'player_id': p['player_id'], 'slot': p['selected_position']}
+        for p in roster
         if p['selected_position'] in ACTIVE_PITCHER_SLOTS
         and p.get('status', '') not in INJURY_STATUSES
     }
 
-    if not active_pitchers:
+    _p("Fetching available pitchers for two-start check...")
+    available_pitchers = {}
+    for p in lg.free_agents('P'):
+        available_pitchers[p['name']] = {'player_id': p['player_id'], 'slot': 'FA'}
+    for p in waiver_players:
+        pos = p.get('eligible_positions', [])
+        if any(x in pos for x in ('SP', 'RP', 'P')):
+            available_pitchers[p['name']] = {'player_id': p['player_id'], 'slot': 'W'}
+
+    all_pitchers = {**available_pitchers, **active_pitchers}  # roster takes precedence
+
+    if not all_pitchers:
         return []
 
     _p("Fetching 7-day probable starters for two-start check...")
@@ -737,7 +755,7 @@ def _two_start_pitchers(roster, progress=None):
     starts_by_name = {}
     for s in probable:
         name = s['name']
-        if name not in active_pitchers:
+        if name not in all_pitchers:
             continue
         opp_ops = team_batting.get(s['opponent'], {}).get('ops')
         starts_by_name.setdefault(name, []).append({
@@ -750,11 +768,11 @@ def _two_start_pitchers(roster, progress=None):
     results = []
     for name, start_list in starts_by_name.items():
         if len(start_list) >= 2:
-            p = active_pitchers[name]
+            p = all_pitchers[name]
             results.append({
                 'player_name': name,
                 'player_id':   p['player_id'],
-                'slot':        p['selected_position'],
+                'slot':        p['slot'],
                 'starts':      start_list,
             })
 
@@ -837,7 +855,7 @@ def _category_targets(categories_result, waivers_result, waiver_pitchers_result)
         mine  = float(c['mine']   or 0)
         theirs = float(c['theirs'] or 0)
 
-        if c['winning']:
+        if c['winning'] or c.get('tied'):
             protect.append({'category': cat, 'mine': mine, 'theirs': theirs})
             continue
 
