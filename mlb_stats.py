@@ -192,7 +192,7 @@ def get_probable_starters(days=3):
     data = _get_schedule_raw(7)
     starters = []
     for game in data.get('games', []):
-        date_str = game.get('gameDate', game.get('gameDateTime', ''))[:10]
+        date_str = game.get('officialDate') or game.get('gameDate', '')[:10]
         if date_str > cutoff.strftime('%Y-%m-%d'):
             continue
         teams = game.get('teams', {})
