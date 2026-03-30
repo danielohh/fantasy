@@ -606,10 +606,13 @@ def _get_advise_text_gemini(prompt):
     )
     for attempt in range(3):
         try:
-            response = client.models.generate_content(
+            chunks = []
+            for chunk in client.models.generate_content_stream(
                 model='gemini-2.5-pro', contents=full_prompt, config=config,
-            )
-            return response.text
+            ):
+                if chunk.text:
+                    chunks.append(chunk.text)
+            return ''.join(chunks)
         except Exception as e:
             if attempt < 2:
                 print(f"  [Gemini error: {e}] Retrying in 30s... (attempt {attempt + 2}/3)")
