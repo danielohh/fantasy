@@ -12,3 +12,6 @@ __pycache__/
 
 # Environment variables
 .env
+
+# Shell redirect artifacts (e.g. from unquoted pip install pkg>=version)
+=*
