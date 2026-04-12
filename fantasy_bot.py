@@ -186,6 +186,8 @@ def cmd_analyze(args):
         _print_category_targets(results['category_targets'])
     if 'trade_candidates' in results:
         _print_trade_candidates(results['trade_candidates'])
+    if 'buzz' in results:
+        _print_buzz(results['buzz'])
 
 
 def cmd_advise(args):
@@ -343,6 +345,37 @@ def cmd_email_report(args):
                 )
         if not sell and not buy:
             lines.append("  None identified.")
+
+    # Buzz / trending
+    buzz = results.get('buzz', {})
+    if isinstance(buzz, dict):
+        adds  = buzz.get('trending_adds', [])
+        drops = buzz.get('trending_drops', [])
+        moves = buzz.get('league_moves', [])
+        lines.append("\nBUZZ — TRENDING PICKUPS:")
+        if adds:
+            lines.append("  Trending Adds:")
+            lines.append("-" * 70)
+            for p in adds[:8]:
+                claimed = '  ** CLAIMED **' if p.get('already_claimed') else ''
+                pct_a   = f" (+{p['percent_added']:.0f}% added)" if p.get('percent_added') else ''
+                reason  = f"  {p['reason']}" if p.get('reason') else ''
+                lines.append(
+                    f"  {p['name']:<25} {p['percent_owned']:.0f}% owned{pct_a}{claimed}{reason}"
+                )
+        if drops:
+            lines.append("  Trending Drops:")
+            for p in drops[:5]:
+                pct_d  = f" (-{p['percent_dropped']:.0f}% dropped)" if p.get('percent_dropped') else ''
+                reason = f"  {p['reason']}" if p.get('reason') else ''
+                lines.append(f"  {p['name']:<25} {p['percent_owned']:.0f}% owned{pct_d}{reason}")
+        if moves:
+            lines.append("  Your League Moves:")
+            for m in moves[:10]:
+                team = f" -> {m['team']}" if m.get('team') else ''
+                lines.append(f"  {m['date']}  {m['type'].upper():<5}  {m['player']}{team}")
+        if not adds and not drops and not moves:
+            lines.append("  No buzz data available.")
 
     # News & transactions
     news = results.get('news', {})
@@ -634,11 +667,76 @@ def _build_advise_prompt(results):
             for p in buy[:3]:
                 lines.append(f"    {p['player_name']} — season OPS {p['season_ops']:.3f}")
 
+    buzz = results.get('buzz', {})
+    if isinstance(buzz, dict):
+        adds  = buzz.get('trending_adds', [])
+        drops = buzz.get('trending_drops', [])
+        moves = buzz.get('league_moves', [])
+        if adds or drops or moves:
+            lines.append('\nBUZZ / TRENDING:')
+        if adds:
+            lines.append('  Trending adds (league-wide):')
+            for p in adds[:5]:
+                claimed = ' (ALREADY CLAIMED IN YOUR LEAGUE)' if p.get('already_claimed') else ''
+                pct_a   = f" +{p['percent_added']:.0f}% added" if p.get('percent_added') else ''
+                reason  = f" — {p['reason']}" if p.get('reason') else ''
+                lines.append(
+                    f"    {p['name']} ({p['percent_owned']:.0f}% owned){claimed}{pct_a}{reason}"
+                )
+        if drops:
+            lines.append('  Trending drops (something wrong?):')
+            for p in drops[:5]:
+                pct_d  = f" -{p['percent_dropped']:.0f}% dropped" if p.get('percent_dropped') else ''
+                reason = f" — {p['reason']}" if p.get('reason') else ''
+                lines.append(f"    {p['name']} ({p['percent_owned']:.0f}% owned){pct_d}{reason}")
+        if moves:
+            lines.append('  Your league recent moves:')
+            for m in moves[:5]:
+                lines.append(f"    {m['date']} {m['type'].upper()}: {m['player']}"
+                             + (f" → {m['team']}" if m.get('team') else ''))
+
     lines.append(
         '\nGive me 2-3 prioritized, specific moves to make today. '
         'Be direct — no filler.'
     )
     return '\n'.join(lines)
+
+
+def _print_buzz(data):
+    _header("BUZZ — TRENDING PICKUPS")
+    adds   = data.get('trending_adds', [])
+    drops  = data.get('trending_drops', [])
+    moves  = data.get('league_moves', [])
+
+    if adds:
+        print("  TRENDING ADDS (most added league-wide this week):")
+        print(f"  {'Name':<25} {'%Own':<6} {'Claimed?':<10} Reason")
+        print(f"  {'-'*70}")
+        for p in adds:
+            claimed = 'YES - taken' if p.get('already_claimed') else ''
+            pct_a   = f"  +{p['percent_added']:.0f}% added" if p.get('percent_added') else ''
+            reason  = p.get('reason', '')
+            note    = (reason + pct_a).strip() or '—'
+            print(f"  {p['name']:<25} {p['percent_owned']:<6.0f} {claimed:<10} {note}")
+    else:
+        print("  No trending add data available.")
+
+    if drops:
+        print("\n  TRENDING DROPS (mass-dropped — injury or role change?):")
+        print(f"  {'Name':<25} {'%Own':<6} Reason")
+        print(f"  {'-'*50}")
+        for p in drops:
+            pct_d  = f"  -{p['percent_dropped']:.0f}% dropped" if p.get('percent_dropped') else ''
+            reason = p.get('reason', '')
+            note   = (reason + pct_d).strip() or '—'
+            print(f"  {p['name']:<25} {p['percent_owned']:<6.0f} {note}")
+
+    if moves:
+        print("\n  YOUR LEAGUE'S RECENT MOVES:")
+        print(f"  {'Date':<12} {'Type':<6} {'Player':<25} Team")
+        print(f"  {'-'*60}")
+        for m in moves:
+            print(f"  {m['date']:<12} {m['type']:<6} {m['player']:<25} {m.get('team', '')}")
 
 
 def _print_category_targets(data):
@@ -952,7 +1050,7 @@ def main():
     p.add_argument('--section',
                    choices=['injuries', 'streaming', 'waivers', 'waiver_pitchers',
                             'categories', 'news', 'recent_form', 'two_start_pitchers',
-                            'category_targets', 'trade_candidates'],
+                            'category_targets', 'trade_candidates', 'buzz'],
                    default=None, help='Run one section only (default: all)')
     p.add_argument('--days', type=int, default=3,
                    help='Days ahead to look for streaming starts (default: 3)')

@@ -65,7 +65,7 @@ def analyze(lg, section=None, days=3, progress=None):
     }
 
     # Derived sections depend on other sections' results
-    ALL_SECTIONS = list(runners) + ['category_targets', 'trade_candidates']
+    ALL_SECTIONS = list(runners) + ['category_targets', 'trade_candidates', 'buzz']
 
     if section:
         if section not in ALL_SECTIONS:
@@ -79,6 +79,9 @@ def analyze(lg, section=None, days=3, progress=None):
             return {'trade_candidates': _trade_candidates(
                 runners['recent_form'](), runners['waivers'](),
             )}
+        if section == 'buzz':
+            # Fetch own MLB transactions so buzz can cross-reference
+            return {'buzz': _buzz(lg, None, _prog)}
         return {section: runners[section]()}
 
     results = {}
@@ -94,6 +97,8 @@ def analyze(lg, section=None, days=3, progress=None):
     results['trade_candidates'] = _trade_candidates(
         results['recent_form'], results['waivers'],
     )
+    _prog("Running buzz analysis...")
+    results['buzz'] = _buzz(lg, results['news'].get('transactions', []), _prog)
     return results
 
 
@@ -884,3 +889,202 @@ def _trade_candidates(recent_form_result, waivers_result):
 
     buy_low.sort(key=lambda x: -x['season_ops'])
     return {'sell_high': sell_high, 'buy_low': buy_low}
+
+
+# ---------------------------------------------------------------------------
+# Section: buzz
+# ---------------------------------------------------------------------------
+
+_BUZZ_MIN_ADDED  = 15   # % of leagues adding → counts as trending
+_BUZZ_MIN_DROPPED = 15  # % of leagues dropping → counts as concern
+
+
+def _buzz(lg, transactions=None, progress=None):
+    """
+    Surfaces ownership momentum signals from the Yahoo Fantasy API.
+
+    Returns:
+      trending_adds  - players being rapidly added league-wide this week,
+                       sorted by add rank; includes whether a league-mate
+                       already claimed them and any MLB transaction reason.
+      trending_drops - players being rapidly dropped league-wide.
+      league_moves   - recent add/drop activity inside your specific league.
+    """
+    def _p(msg):
+        if progress: progress(msg)
+
+    if transactions is None:
+        _p("Fetching MLB transactions for buzz context...")
+        transactions = get_transactions(days=3)
+
+    # Build a name→MLB transaction map for cross-referencing
+    mlb_txn_by_name = {}
+    for t in (transactions or []):
+        name = t.get('player', '')
+        if name:
+            mlb_txn_by_name[name.lower()] = t
+
+    lid = lg.league_id
+
+    def _parse_players(raw):
+        """Parse Yahoo players list response; return list of player dicts."""
+        players = []
+        try:
+            league = raw.get('fantasy_content', {}).get('league', [{}, {}])
+            tail = league[1] if len(league) > 1 else {}
+            if isinstance(tail, list):
+                tail = {k: v for d in tail if isinstance(d, dict) for k, v in d.items()}
+            player_map = tail.get('players', {})
+            count = int(player_map.get('count', 0))
+            for i in range(count):
+                entry = player_map.get(str(i), {}).get('player')
+                if not entry or not isinstance(entry, list):
+                    continue
+                meta       = entry[0] if len(entry) > 0 else []
+                stats_blk  = entry[1] if len(entry) > 1 else {}
+                name, pid = '', None
+                for item in (meta if isinstance(meta, list) else []):
+                    if isinstance(item, dict):
+                        if 'name' in item:
+                            name = item['name'].get('full', '')
+                        if 'player_id' in item:
+                            pid = item['player_id']
+                ownership  = stats_blk.get('ownership', {}) if isinstance(stats_blk, dict) else {}
+                def _pct(key):
+                    val = ownership.get(key, {}) if isinstance(ownership, dict) else {}
+                    if isinstance(val, dict):
+                        return float(val.get('value', 0) or 0)
+                    return float(val or 0)
+                if name:
+                    players.append({
+                        'name':            name,
+                        'player_id':       pid,
+                        'percent_owned':   _pct('percent_owned'),
+                        'percent_added':   _pct('percent_added'),
+                        'percent_dropped': _pct('percent_dropped'),
+                    })
+        except Exception:
+            pass
+        return players
+
+    def _parse_league_txns(raw):
+        """Parse Yahoo league transactions response; return list of move dicts."""
+        moves = []
+        try:
+            league = raw.get('fantasy_content', {}).get('league', [{}, {}])
+            tail = league[1] if len(league) > 1 else {}
+            if isinstance(tail, list):
+                tail = {k: v for d in tail if isinstance(d, dict) for k, v in d.items()}
+            txn_map = tail.get('transactions', {})
+            count = int(txn_map.get('count', 0))
+            for i in range(count):
+                txn = txn_map.get(str(i), {}).get('transaction')
+                if not txn or not isinstance(txn, list):
+                    continue
+                meta      = txn[0] if len(txn) > 0 else {}
+                data_blk  = txn[1] if len(txn) > 1 else {}
+                txn_type  = meta.get('type', '') if isinstance(meta, dict) else ''
+                if txn_type not in ('add', 'drop'):
+                    continue
+                ts = meta.get('timestamp', '') if isinstance(meta, dict) else ''
+                date = str(ts)[:10] if ts else ''
+                players_data = data_blk.get('players', {}) if isinstance(data_blk, dict) else {}
+                p_count = int(players_data.get('count', 0))
+                for j in range(p_count):
+                    pe = players_data.get(str(j), {}).get('player')
+                    if not pe or not isinstance(pe, list):
+                        continue
+                    pmeta = pe[0] if len(pe) > 0 else []
+                    ptxn  = pe[1] if len(pe) > 1 else {}
+                    pname = ''
+                    for item in (pmeta if isinstance(pmeta, list) else []):
+                        if isinstance(item, dict) and 'name' in item:
+                            pname = item['name'].get('full', '')
+                            break
+                    ptxn_data = ptxn.get('transaction_data', {}) if isinstance(ptxn, dict) else {}
+                    if isinstance(ptxn_data, list):
+                        ptxn_data = ptxn_data[0] if ptxn_data else {}
+                    p_type = ptxn_data.get('type', txn_type) if isinstance(ptxn_data, dict) else txn_type
+                    team   = ptxn_data.get('destination_team_name', '') if isinstance(ptxn_data, dict) else ''
+                    if pname:
+                        moves.append({'type': p_type, 'player': pname,
+                                      'team': team, 'date': date})
+        except Exception:
+            pass
+        return moves
+
+    _p("Fetching trending adds from Yahoo...")
+    trending_adds, trending_drops = [], []
+    try:
+        raw = lg.yhandler.get(
+            f'league/{lid}/players;sort=AR;sort_type=week;start=0;count=25;out=ownership'
+        )
+        trending_adds = _parse_players(raw)
+    except Exception:
+        pass
+
+    _p("Fetching trending drops from Yahoo...")
+    try:
+        raw = lg.yhandler.get(
+            f'league/{lid}/players;sort=DR;sort_type=week;start=0;count=25;out=ownership'
+        )
+        trending_drops = _parse_players(raw)
+    except Exception:
+        pass
+
+    _p("Fetching your league's recent transactions...")
+    league_moves = []
+    try:
+        raw = lg.yhandler.get(f'league/{lid}/transactions;types=add,drop;count=25')
+        league_moves = _parse_league_txns(raw)
+    except Exception:
+        pass
+
+    claimed = {m['player'] for m in league_moves if m['type'] == 'add'}
+
+    def _enrich_and_filter(players, pct_key):
+        out = []
+        for p in players:
+            pct = p.get(pct_key, 0)
+            # Keep if Yahoo returned a pct value AND it clears threshold,
+            # OR if Yahoo didn't return pct data (pct==0) just show top 10 ranked
+            if pct > 0 and pct < _BUZZ_MIN_ADDED:
+                continue
+            reason = None
+            for mlb_name, txn in mlb_txn_by_name.items():
+                if p['name'].lower() in mlb_name or mlb_name in p['name'].lower():
+                    reason = f"{txn['type']} ({txn.get('team', '')})"
+                    break
+            entry = {
+                'name':            p['name'],
+                'player_id':       p['player_id'],
+                'percent_owned':   p['percent_owned'],
+                'already_claimed': p['name'] in claimed,
+            }
+            if pct:
+                entry[pct_key] = pct
+            if reason:
+                entry['reason'] = reason
+            out.append(entry)
+        # If threshold filtered everything (no pct data), fall back to top 10
+        return out if out else [
+            {
+                'name':            p['name'],
+                'player_id':       p['player_id'],
+                'percent_owned':   p['percent_owned'],
+                'already_claimed': p['name'] in claimed,
+                'reason': next(
+                    (f"{t['type']} ({t.get('team','')})"
+                     for n, t in mlb_txn_by_name.items()
+                     if p['name'].lower() in n or n in p['name'].lower()),
+                    None,
+                ),
+            }
+            for p in players[:10]
+        ]
+
+    return {
+        'trending_adds':  _enrich_and_filter(trending_adds, 'percent_added'),
+        'trending_drops': _enrich_and_filter(trending_drops, 'percent_dropped'),
+        'league_moves':   league_moves[:15],
+    }
