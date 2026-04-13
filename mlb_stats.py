@@ -2,19 +2,38 @@ import datetime
 import json
 import os
 import pickle
+import time
 import unicodedata
 
 import requests
 
-MLB_CACHE_FILE = '.mlb_cache.pkl'
-_cache = None
-_base_url = 'https://statsapi.mlb.com/api/v1'
-_player_cache = {}   # name -> {'id': int|None, 'team': str|None}
-_schedule_cache = {} # days -> raw schedule JSON
+MLB_CACHE_FILE     = '.mlb_cache.pkl'      # debug/frozen cache (--cache flag)
+MLB_AUTO_CACHE_FILE = '.mlb_auto_cache.pkl' # TTL-based auto-cache (always active)
+
+_cache      = None  # frozen debug cache; None = disabled
+_auto_cache = None  # TTL cache; lazily loaded on first API call
+_base_url   = 'https://statsapi.mlb.com/api/v1'
+_player_cache   = {}  # name -> {'id': int|None, 'team': str|None}
+_schedule_cache = {}  # days -> raw schedule JSON
+
+# TTL in seconds per endpoint prefix (longest-matching prefix wins)
+_TTL = {
+    'people/search': 86400,  # player ID lookups — never change
+    'teams/stats':    14400,  # team batting stats — 4 h
+    'teams':          43200,  # depth charts — 12 h
+    'people':          7200,  # game logs — 2 h (update after games finish)
+    'schedule':        1800,  # probable starters — 30 min (announced throughout day)
+}
+
+def _ttl_for(endpoint):
+    for prefix in ('people/search', 'teams/stats', 'teams', 'people', 'schedule'):
+        if endpoint.startswith(prefix):
+            return _TTL[prefix]
+    return 7200  # default 2 h
 
 
 def enable_cache():
-    """Load cache from MLB_CACHE_FILE and patch _api_get to cache responses."""
+    """Load frozen debug cache (--cache flag). Responses never expire."""
     global _cache
     if os.path.exists(MLB_CACHE_FILE):
         with open(MLB_CACHE_FILE, 'rb') as f:
@@ -28,22 +47,58 @@ def _save_cache():
         pickle.dump(_cache, f)
 
 
-def _api_get(endpoint, params=None):
-    """GET from MLB Stats API with optional caching."""
-    if _cache is None:
-        # Caching disabled
-        resp = requests.get(f'{_base_url}/{endpoint}', params=params, timeout=10)
-        return resp.json()
+def _load_auto_cache():
+    global _auto_cache
+    if _auto_cache is not None:
+        return
+    if os.path.exists(MLB_AUTO_CACHE_FILE):
+        try:
+            with open(MLB_AUTO_CACHE_FILE, 'rb') as f:
+                _auto_cache = pickle.load(f)
+        except Exception:
+            _auto_cache = {}
+    else:
+        _auto_cache = {}
 
-    # Caching enabled
+
+def _save_auto_cache():
+    with open(MLB_AUTO_CACHE_FILE, 'wb') as f:
+        pickle.dump(_auto_cache, f)
+
+
+def _api_get(endpoint, params=None):
+    """GET from MLB Stats API.
+
+    Two cache layers:
+      1. Frozen debug cache (enabled via enable_cache() / --cache flag) — no expiry.
+      2. TTL auto-cache (always active) — per-endpoint expiry defined in _TTL.
+    """
     key = ('get', endpoint, json.dumps(params or {}, sort_keys=True))
-    if key in _cache:
-        return _cache[key]
+
+    # Layer 1: frozen debug cache takes full precedence
+    if _cache is not None:
+        if key in _cache:
+            return _cache[key]
+        resp = requests.get(f'{_base_url}/{endpoint}', params=params, timeout=10)
+        data = resp.json()
+        _cache[key] = data
+        _save_cache()
+        return data
+
+    # Layer 2: TTL auto-cache
+    _load_auto_cache()
+    now = time.time()
+    ttl = _ttl_for(endpoint)
+    entry = _auto_cache.get(key)
+    if entry is not None:
+        data, ts = entry
+        if now - ts < ttl:
+            return data
 
     resp = requests.get(f'{_base_url}/{endpoint}', params=params, timeout=10)
     data = resp.json()
-    _cache[key] = data
-    _save_cache()
+    _auto_cache[key] = (data, now)
+    _save_auto_cache()
     return data
 
 
@@ -152,7 +207,14 @@ def _get_schedule_raw(days=7):
         'sportId': 1,
         'hydrate': 'probablePitcher',
     })
-    games = [g for d in raw.get('dates', []) for g in d.get('games', [])]
+    seen = set()
+    games = []
+    for d in raw.get('dates', []):
+        for g in d.get('games', []):
+            pk = g.get('gamePk')
+            if pk not in seen:
+                seen.add(pk)
+                games.append(g)
     data = {'games': games}
     _schedule_cache[days] = data
     return data
@@ -208,6 +270,106 @@ def get_probable_starters(days=3):
                     'home': side == 'home',
                 })
     return starters
+
+
+def get_projected_starters(days=7):
+    """
+    Project probable starters for games not yet officially announced.
+    Uses SP depth charts (rotation order) + each SP's last start date + 5-day rotation assumption.
+    Returns same format as get_probable_starters() but with 'projected': True added.
+    Only returns projections for games where no probablePitcher is listed.
+    """
+    today = datetime.date.today()
+    cutoff = today + datetime.timedelta(days=days - 1)
+    cutoff_str = cutoff.strftime('%Y-%m-%d')
+    today_str = today.strftime('%Y-%m-%d')
+    year = today.year
+
+    # Build per-team game info from schedule
+    schedule = _get_schedule_raw(days)
+    team_info = {}  # team_name -> {'id': int, 'games': {date_str: {home, opponent, has_probable}}}
+    for g in schedule.get('games', []):
+        date_str = g.get('officialDate') or g.get('gameDate', '')[:10]
+        if date_str > cutoff_str:
+            continue
+        teams = g.get('teams', {})
+        for side, opp_side in [('home', 'away'), ('away', 'home')]:
+            t = teams.get(side, {}).get('team', {})
+            name, tid = t.get('name'), t.get('id')
+            if not name:
+                continue
+            if name not in team_info:
+                team_info[name] = {'id': tid, 'games': {}}
+            opp = teams.get(opp_side, {}).get('team', {}).get('name', '')
+            has_prob = bool(teams.get(side, {}).get('probablePitcher', {}).get('fullName'))
+            team_info[name]['games'][date_str] = {
+                'home': side == 'home',
+                'opponent': opp,
+                'has_probable': has_prob,
+            }
+
+    # Get SP rotation order (depth chart) for each team
+    team_rotations = {}  # team_name -> [pitcher_name, ...]
+    for team_name, info in team_info.items():
+        dc = _api_get(f'teams/{info["id"]}/roster', {'rosterType': 'depthChart'})
+        sps = [
+            p['person']['fullName']
+            for p in dc.get('roster', [])
+            if p.get('position', {}).get('abbreviation') == 'SP'
+        ]
+        team_rotations[team_name] = sps[:6]
+
+    # Fetch last start date for every SP in every rotation
+    all_sp_names = {name for sps in team_rotations.values() for name in sps}
+    last_starts = {}  # pitcher_name -> datetime.date
+    for name in all_sp_names:
+        pid = _lookup_player_id(name)
+        if pid is None:
+            continue
+        try:
+            data = _api_get('people/' + str(pid), {
+                'hydrate': f'stats(group=pitching,type=gameLog,season={year})',
+            })
+            splits = (data.get('people', [{}])[0]
+                      .get('stats', [{}])[0]
+                      .get('splits', []))
+            game_starts = [s for s in splits if s.get('stat', {}).get('gamesStarted', 0) > 0]
+            if game_starts:
+                last_starts[name] = datetime.date.fromisoformat(game_starts[-1]['date'])
+        except Exception:
+            pass
+
+    # Project starts per pitcher
+    projected = []
+    for team_name, info in team_info.items():
+        rotation = team_rotations.get(team_name, [])
+        # Unannounced games in chronological order
+        unannounced = sorted(
+            [(d, g) for d, g in info['games'].items() if not g['has_probable'] and d >= today_str]
+        )
+        if not unannounced:
+            continue
+
+        for sp_name in rotation:
+            last = last_starts.get(sp_name)
+            if last is None:
+                continue
+            # Project up to 2 starts in the window for this pitcher
+            current_last = last
+            for date_str, game_info in unannounced:
+                game_date = datetime.date.fromisoformat(date_str)
+                if (game_date - current_last).days >= 4:
+                    projected.append({
+                        'name':      sp_name,
+                        'team':      team_name,
+                        'opponent':  game_info['opponent'],
+                        'date':      date_str,
+                        'home':      game_info['home'],
+                        'projected': True,
+                    })
+                    current_last = game_date
+
+    return projected
 
 
 def _fetch_pitcher_stats(names, stat_type):

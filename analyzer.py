@@ -2,6 +2,7 @@ import datetime
 
 from mlb_stats import (
     get_probable_starters,
+    get_projected_starters,
     get_pitcher_stats,
     get_recent_pitcher_stats,
     get_batter_stats,
@@ -749,21 +750,56 @@ def _two_start_pitchers(roster, lg, waiver_players, progress=None):
     _p("Fetching 7-day probable starters for two-start check...")
     probable = get_probable_starters(days=7)
 
+    _p("Projecting unannounced starts via rotation depth charts...")
+    projected = get_projected_starters(days=7)
+
     _p("Fetching team batting stats for opponent quality...")
     team_batting = get_team_batting_stats()
 
-    starts_by_name = {}
+    # Merge confirmed + projected; confirmed takes priority for same pitcher+date
+    seen_keys = set()
+    all_starts = []
     for s in probable:
+        key = (s['name'], s['date'])
+        seen_keys.add(key)
+        all_starts.append({**s, 'projected': False})
+    for s in projected:
+        key = (s['name'], s['date'])
+        if key not in seen_keys:
+            seen_keys.add(key)
+            all_starts.append(s)
+
+    starts_by_name = {}
+    for s in all_starts:
         name = s['name']
         if name not in all_pitchers:
             continue
         opp_ops = team_batting.get(s['opponent'], {}).get('ops')
         starts_by_name.setdefault(name, []).append({
-            'date':     s['date'],
-            'opponent': s['opponent'],
-            'home':     s['home'],
-            'opp_ops':  opp_ops,
+            'date':      s['date'],
+            'opponent':  s['opponent'],
+            'home':      s['home'],
+            'opp_ops':   opp_ops,
+            'projected': s.get('projected', False),
         })
+
+    # Remove projected starts that are too close (<4 days) to any confirmed start.
+    # Confirmed starts always win; projections are only valid if far enough away.
+    for name in list(starts_by_name.keys()):
+        start_list = sorted(starts_by_name[name], key=lambda s: s['date'])
+        confirmed = [s for s in start_list if not s['projected']]
+        valid = list(confirmed)
+        for s in start_list:
+            if not s['projected']:
+                continue
+            s_date = datetime.date.fromisoformat(s['date'])
+            too_close = any(
+                abs((s_date - datetime.date.fromisoformat(o['date'])).days) < 4
+                for o in valid
+            )
+            if not too_close:
+                valid.append(s)
+        starts_by_name[name] = sorted(valid, key=lambda s: s['date'])
 
     results = []
     for name, start_list in starts_by_name.items():
@@ -842,13 +878,18 @@ def _category_targets(categories_result, waivers_result, waiver_pitchers_result)
                     best_waiver_batter[stat_key] = (u['candidate']['name'], val)
 
     # Best waiver RP by stat
+    _lower_stat_keys = {_CAT_PITCHER[c] for c in LOWER_IS_BETTER if c in _CAT_PITCHER}
     best_waiver_pitcher = {}  # stat_key -> (name, value)
     for p in waiver_pitchers_result if isinstance(waiver_pitchers_result, list) else []:
         cs = p.get('stats', {})
         for stat_key in _CAT_PITCHER.values():
             val = cs.get(stat_key, 0) or 0
-            if val > best_waiver_pitcher.get(stat_key, (None, -1))[1]:
-                best_waiver_pitcher[stat_key] = (p['name'], val)
+            if stat_key in _lower_stat_keys:
+                if val > 0 and val < best_waiver_pitcher.get(stat_key, (None, float('inf')))[1]:
+                    best_waiver_pitcher[stat_key] = (p['name'], val)
+            else:
+                if val > best_waiver_pitcher.get(stat_key, (None, -1))[1]:
+                    best_waiver_pitcher[stat_key] = (p['name'], val)
 
     for c in cats:
         cat   = c['category']
@@ -888,8 +929,11 @@ def _category_targets(categories_result, waivers_result, waiver_pitchers_result)
             player     = None
             if stat_key and stat_key in source:
                 player_name, val = source[stat_key]
-                suggestion = f"Add {player_name} (leads available in {stat_key}: {val})"
-                player     = player_name
+                is_lower_better = stat_key in _lower_stat_keys
+                useful = (is_lower_better and val < mine) or (not is_lower_better and val != 0)
+                if useful:
+                    suggestion = f"Add {player_name} (leads available in {stat_key}: {val})"
+                    player     = player_name
             chase.append({**entry_base, 'suggestion': suggestion, 'player': player})
 
     return {'chase': chase, 'protect': protect, 'concede': concede}

@@ -383,7 +383,8 @@ def cmd_email_report(args):
             for s in p['starts']:
                 ha      = _badge('Home', '#fff', '#27ae60') if s['home'] else _badge('Away', '#555', '#ddd')
                 opp_ops = f'  <span style="{muted}">OppOPS {s["opp_ops"]:.3f}</span>' if s.get('opp_ops') else ''
-                starts_html += f'{s["date"]} vs {s["opponent"]} {ha}{opp_ops}<br>'
+                proj    = f'  <span style="{muted}">(proj)</span>' if s.get('projected') else ''
+                starts_html += f'{s["date"]} vs {s["opponent"]} {ha}{opp_ops}{proj}<br>'
             slot = p.get('slot', '')
             if slot == 'FA':
                 src_badge = _badge('FA', '#fff', '#e67e22')
@@ -785,6 +786,7 @@ def _build_advise_prompt(results):
             opps = ', '.join(
                 f"vs {s['opponent']} ({'home' if s['home'] else 'away'})"
                 + (f" OPS {s['opp_ops']:.3f}" if s.get('opp_ops') else '')
+                + (' (proj)' if s.get('projected') else '')
                 for s in p['starts']
             )
             lines.append(f"  {p['player_name']} — {len(p['starts'])} starts: {opps}")
@@ -943,7 +945,8 @@ def _print_two_start_pitchers(data):
         for s in starts:
             ha      = 'home' if s['home'] else 'away'
             opp_ops = f"  OppOPS {s['opp_ops']:.3f}" if s.get('opp_ops') else ''
-            print(f"    {s['date']}  vs {s['opponent']:<25} ({ha}){opp_ops}")
+            proj    = '  (proj)' if s.get('projected') else ''
+            print(f"    {s['date']}  vs {s['opponent']:<25} ({ha}){opp_ops}{proj}")
 
 
 def _header(title):

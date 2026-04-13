@@ -4,6 +4,7 @@ oauth2.json
 # API cache files
 .yahoo_cache.pkl
 .mlb_cache.pkl
+.mlb_auto_cache.pkl
 
 # Python
 __pycache__/
