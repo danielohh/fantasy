@@ -564,7 +564,7 @@ def _advise_gemini(prompt):
     config = types.GenerateContentConfig(
         tools=[types.Tool(google_search=types.GoogleSearch())],
     )
-    models = ['gemini-2.5-flash', 'gemini-1.5-flash']
+    models = ['gemini-2.5-flash', 'gemini-2.0-flash-lite']
     for model in models:
         for attempt in range(3):
             try:
@@ -611,7 +611,7 @@ def _get_advise_text_gemini(prompt):
     config = types.GenerateContentConfig(
         tools=[types.Tool(google_search=types.GoogleSearch())],
     )
-    models = ['gemini-2.5-flash', 'gemini-1.5-flash']
+    models = ['gemini-2.5-flash', 'gemini-2.0-flash-lite']
     for model in models:
         for attempt in range(3):
             try:
@@ -635,7 +635,8 @@ def _get_advise_text_gemini(prompt):
     raise RuntimeError("All Gemini models unavailable")
 
 
-def _build_advise_prompt(results):
+def 
+Error generating advice: 404 NOT_FOUND. {'error': {'code': 404, 'message': 'models/gemini-1.5-flash is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.', 'status': 'NOT_FOUND'}}_build_advise_prompt(results):
     lines = []
 
     # League context header
