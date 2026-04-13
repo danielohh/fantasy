@@ -564,21 +564,27 @@ def _advise_gemini(prompt):
     config = types.GenerateContentConfig(
         tools=[types.Tool(google_search=types.GoogleSearch())],
     )
-    for attempt in range(3):
-        try:
-            for chunk in client.models.generate_content_stream(
-                model='gemini-2.5-flash', contents=full_prompt, config=config,
-            ):
-                if chunk.text:
-                    print(chunk.text, end='', flush=True)
-            print()
-            return
-        except Exception as e:
-            if attempt < 2:
-                print(f"\n  [Gemini error: {e}] Retrying in 30s... (attempt {attempt + 2}/3)")
-                time.sleep(30)
-            else:
-                raise
+    models = ['gemini-2.5-flash', 'gemini-2.0-flash']
+    for model in models:
+        for attempt in range(3):
+            try:
+                for chunk in client.models.generate_content_stream(
+                    model=model, contents=full_prompt, config=config,
+                ):
+                    if chunk.text:
+                        print(chunk.text, end='', flush=True)
+                print()
+                return
+            except Exception as e:
+                if '503' in str(e) or 'UNAVAILABLE' in str(e):
+                    if attempt < 2:
+                        print(f"\n  [{model} unavailable] Retrying in 15s... (attempt {attempt + 2}/3)")
+                        time.sleep(15)
+                    else:
+                        print(f"\n  [{model} unavailable after 3 attempts, trying fallback]")
+                        break
+                else:
+                    raise
 
 
 def _get_advise_text_claude(prompt):
@@ -605,21 +611,28 @@ def _get_advise_text_gemini(prompt):
     config = types.GenerateContentConfig(
         tools=[types.Tool(google_search=types.GoogleSearch())],
     )
-    for attempt in range(3):
-        try:
-            chunks = []
-            for chunk in client.models.generate_content_stream(
-                model='gemini-2.5-flash', contents=full_prompt, config=config,
-            ):
-                if chunk.text:
-                    chunks.append(chunk.text)
-            return ''.join(chunks)
-        except Exception as e:
-            if attempt < 2:
-                print(f"  [Gemini error: {e}] Retrying in 30s... (attempt {attempt + 2}/3)")
-                time.sleep(30)
-            else:
-                raise
+    models = ['gemini-2.5-flash', 'gemini-2.0-flash']
+    for model in models:
+        for attempt in range(3):
+            try:
+                chunks = []
+                for chunk in client.models.generate_content_stream(
+                    model=model, contents=full_prompt, config=config,
+                ):
+                    if chunk.text:
+                        chunks.append(chunk.text)
+                return ''.join(chunks)
+            except Exception as e:
+                if '503' in str(e) or 'UNAVAILABLE' in str(e):
+                    if attempt < 2:
+                        print(f"  [{model} unavailable] Retrying in 15s... (attempt {attempt + 2}/3)")
+                        time.sleep(15)
+                    else:
+                        print(f"  [{model} unavailable after 3 attempts, trying fallback]")
+                        break
+                else:
+                    raise
+    raise RuntimeError("All Gemini models unavailable")
 
 
 def _build_advise_prompt(results):
