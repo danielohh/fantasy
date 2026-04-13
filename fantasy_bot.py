@@ -271,9 +271,13 @@ def cmd_email_report(args):
     tied     = cats.get('tied', 0)
     opp      = cats.get('opp', '')
     if cat_list and opp:
-        tied_str = f', {tied}T' if tied else ''
+        total    = len(cat_list)
+        trailing = total - leading - tied
+        tied_str = f', Tied {tied}' if tied else ''
+        score    = f'{leading} - {trailing}'
+        outcome  = 'Winning' if leading > trailing else ('Losing' if trailing > leading else 'Tied')
         subject = (f"Fantasy Baseball — {datetime.date.today().strftime('%a, %b %d')} "
-                   f"| Leading {leading}{tied_str}/{len(cat_list)} vs {opp}")
+                   f"| Leading {leading}{tied_str} of {total} · {outcome} {score} vs {opp}")
     else:
         subject = f"Fantasy Baseball — {datetime.date.today().strftime('%a, %b %d')}"
 
@@ -305,12 +309,18 @@ def cmd_email_report(args):
     )
     if cat_list and opp:
         my_team = cats.get('my_team', 'Your team')
-        win_color = '#2ecc71' if leading > len(cat_list) / 2 else '#e74c3c'
-        tied_str = f', {tied}T' if tied else ''
+        total_c  = len(cat_list)
+        trailing = total_c - leading - tied
+        tied_str = f', Tied {tied}' if tied else ''
+        score    = f'{leading} - {trailing}'
+        outcome  = 'Winning' if leading > trailing else ('Losing' if trailing > leading else 'Tied')
+        win_color = '#2ecc71' if leading > trailing else '#e74c3c'
         html.append(
             f'<div style="background:#2d2d44;padding:8px 20px;color:#ccc;font-size:12px">'
             f'Week {cats.get("week","?")}  ·  {my_team} vs {opp}  ·  '
-            f'<span style="color:{win_color};font-weight:bold">Leading {leading}{tied_str}/{len(cat_list)} categories</span>'
+            f'<span style="color:{win_color};font-weight:bold">'
+            f'Leading {leading}{tied_str} of {total_c} categories  ·  {outcome} {score}'
+            f'</span>'
             f'</div>'
         )
 
@@ -1070,9 +1080,12 @@ def _print_categories(data):
     tied    = data.get('tied', 0)
     total   = len(cats)
 
+    trailing = total - leading - tied
+    tied_str = f', Tied {tied}' if tied else ''
+    score    = f'{leading} - {trailing}'
+    outcome  = 'Winning' if leading > trailing else ('Losing' if trailing > leading else 'Tied')
     print(f"  Week {week}: {my_team} vs {opp}")
-    tied_str = f', {tied}T' if tied else ''
-    print(f"  Leading {leading}{tied_str} of {total} categories\n")
+    print(f"  Leading {leading}{tied_str} of {total} categories  ·  {outcome} {score}\n")
     print(f"  {'Cat':<6} {'Yours':>8} {'Theirs':>8}  Result")
     print(f"  {'-'*35}")
     for c in cats:
