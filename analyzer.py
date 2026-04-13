@@ -719,12 +719,21 @@ def _recent_form(roster, progress=None):
 
 def _two_start_pitchers(roster, lg, waiver_players, progress=None):
     """
-    Returns list of pitchers (on roster or available as FA/waiver) with 2+ starts in the next 7 days.
+    Returns list of pitchers (on roster or available as FA/waiver) with 2+ starts in the
+    current fantasy week (Mon-Sun). Only runs on Monday/Tuesday; returns [] otherwise.
     Each dict: {player_name, player_id, slot, starts: [{date, opponent, home, opp_ops}]}
     Sorted by number of starts descending, then player name.
     """
     def _p(msg):
         if progress: progress(msg)
+
+    today = datetime.date.today()
+    if today.weekday() > 1:  # 0=Mon, 1=Tue
+        return []
+
+    # Days remaining in the week including today (Mon=7, Tue=6)
+    days_left = 7 - today.weekday()
+    week_end = today + datetime.timedelta(days=days_left - 1)
 
     active_pitchers = {
         p['name']: {'player_id': p['player_id'], 'slot': p['selected_position']}
@@ -747,11 +756,11 @@ def _two_start_pitchers(roster, lg, waiver_players, progress=None):
     if not all_pitchers:
         return []
 
-    _p("Fetching 7-day probable starters for two-start check...")
-    probable = get_probable_starters(days=7)
+    _p("Fetching probable starters for two-start check...")
+    probable = get_probable_starters(days=days_left)
 
     _p("Projecting unannounced starts via rotation depth charts...")
-    projected = get_projected_starters(days=7)
+    projected = get_projected_starters(days=days_left)
 
     _p("Fetching team batting stats for opponent quality...")
     team_batting = get_team_batting_stats()
@@ -773,6 +782,8 @@ def _two_start_pitchers(roster, lg, waiver_players, progress=None):
     for s in all_starts:
         name = s['name']
         if name not in all_pitchers:
+            continue
+        if datetime.date.fromisoformat(s['date']) > week_end:
             continue
         opp_ops = team_batting.get(s['opponent'], {}).get('ops')
         starts_by_name.setdefault(name, []).append({

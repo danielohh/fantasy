@@ -375,7 +375,7 @@ def cmd_email_report(args):
         html.append(none_msg)
 
     # ── Two-Start Pitchers ──────────────────────────────────────────────────
-    html.append(_h('TWO-START PITCHERS (next 7 days)'))
+    html.append(_h('TWO-START PITCHERS (this week)'))
     if two_start:
         rows = []
         for p in two_start:
@@ -794,7 +794,7 @@ def _build_advise_prompt(results):
 
     two_start = results.get('two_start_pitchers', [])
     if two_start:
-        lines.append('\nTWO-START PITCHERS (next 7 days — roster + available streamers):')
+        lines.append('\nTWO-START PITCHERS (this week — roster + available streamers):')
         for p in two_start:
             opps = ', '.join(
                 f"vs {s['opponent']} ({'home' if s['home'] else 'away'})"
@@ -948,7 +948,7 @@ def _print_recent_form(data):
 
 
 def _print_two_start_pitchers(data):
-    _header("TWO-START PITCHERS (next 7 days)")
+    _header("TWO-START PITCHERS (this week)")
     if not data:
         print("  No pitchers with 2+ starts this week.")
         return
