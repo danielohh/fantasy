@@ -564,7 +564,7 @@ def _advise_gemini(prompt):
     config = types.GenerateContentConfig(
         tools=[types.Tool(google_search=types.GoogleSearch())],
     )
-    models = ['gemini-2.5-flash', 'gemini-2.0-flash']
+    models = ['gemini-2.5-flash', 'gemini-1.5-flash']
     for model in models:
         for attempt in range(3):
             try:
@@ -611,7 +611,7 @@ def _get_advise_text_gemini(prompt):
     config = types.GenerateContentConfig(
         tools=[types.Tool(google_search=types.GoogleSearch())],
     )
-    models = ['gemini-2.5-flash', 'gemini-2.0-flash']
+    models = ['gemini-2.5-flash', 'gemini-1.5-flash']
     for model in models:
         for attempt in range(3):
             try:
