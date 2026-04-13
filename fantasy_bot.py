@@ -268,10 +268,12 @@ def cmd_email_report(args):
     # Build subject with category lead if available
     cat_list = cats.get('cats', [])
     leading  = cats.get('leading', 0)
+    tied     = cats.get('tied', 0)
     opp      = cats.get('opp', '')
     if cat_list and opp:
+        tied_str = f', {tied}T' if tied else ''
         subject = (f"Fantasy Baseball — {datetime.date.today().strftime('%a, %b %d')} "
-                   f"| Leading {leading}/{len(cat_list)} vs {opp}")
+                   f"| Leading {leading}{tied_str}/{len(cat_list)} vs {opp}")
     else:
         subject = f"Fantasy Baseball — {datetime.date.today().strftime('%a, %b %d')}"
 
@@ -304,10 +306,11 @@ def cmd_email_report(args):
     if cat_list and opp:
         my_team = cats.get('my_team', 'Your team')
         win_color = '#2ecc71' if leading > len(cat_list) / 2 else '#e74c3c'
+        tied_str = f', {tied}T' if tied else ''
         html.append(
             f'<div style="background:#2d2d44;padding:8px 20px;color:#ccc;font-size:12px">'
             f'Week {cats.get("week","?")}  ·  {my_team} vs {opp}  ·  '
-            f'<span style="color:{win_color};font-weight:bold">Leading {leading}/{len(cat_list)} categories</span>'
+            f'<span style="color:{win_color};font-weight:bold">Leading {leading}{tied_str}/{len(cat_list)} categories</span>'
             f'</div>'
         )
 
@@ -1064,10 +1067,12 @@ def _print_categories(data):
     opp     = data.get('opp', 'Opponent')
     cats    = data.get('cats', [])
     leading = data.get('leading', 0)
+    tied    = data.get('tied', 0)
     total   = len(cats)
 
     print(f"  Week {week}: {my_team} vs {opp}")
-    print(f"  Leading {leading} of {total} categories\n")
+    tied_str = f', {tied}T' if tied else ''
+    print(f"  Leading {leading}{tied_str} of {total} categories\n")
     print(f"  {'Cat':<6} {'Yours':>8} {'Theirs':>8}  Result")
     print(f"  {'-'*35}")
     for c in cats:

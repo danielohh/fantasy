@@ -492,6 +492,7 @@ def _categories(lg):
             'opp':     opp_name,
             'cats':    cats,
             'leading': sum(1 for c in cats if c['winning']),
+            'tied':    sum(1 for c in cats if c.get('tied')),
         }
 
     except Exception as e:
