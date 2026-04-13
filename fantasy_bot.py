@@ -635,8 +635,7 @@ def _get_advise_text_gemini(prompt):
     raise RuntimeError("All Gemini models unavailable")
 
 
-def 
-Error generating advice: 404 NOT_FOUND. {'error': {'code': 404, 'message': 'models/gemini-1.5-flash is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.', 'status': 'NOT_FOUND'}}_build_advise_prompt(results):
+def _build_advise_prompt(results):
     lines = []
 
     # League context header
