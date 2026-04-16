@@ -577,7 +577,7 @@ def _advise_gemini(prompt):
     config = types.GenerateContentConfig(
         tools=[types.Tool(google_search=types.GoogleSearch())],
     )
-    models = ['gemini-2.5-flash', 'gemini-2.0-flash-lite']
+    models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite']
     for model in models:
         for attempt in range(3):
             try:
@@ -589,7 +589,7 @@ def _advise_gemini(prompt):
                 print()
                 return
             except Exception as e:
-                if '503' in str(e) or 'UNAVAILABLE' in str(e):
+                if '503' in str(e) or 'UNAVAILABLE' in str(e) or '404' in str(e) or 'NOT_FOUND' in str(e):
                     if attempt < 2:
                         print(f"\n  [{model} unavailable] Retrying in 15s... (attempt {attempt + 2}/3)")
                         time.sleep(15)
@@ -624,7 +624,7 @@ def _get_advise_text_gemini(prompt):
     config = types.GenerateContentConfig(
         tools=[types.Tool(google_search=types.GoogleSearch())],
     )
-    models = ['gemini-2.5-flash', 'gemini-2.0-flash-lite']
+    models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite']
     for model in models:
         for attempt in range(3):
             try:
@@ -636,7 +636,7 @@ def _get_advise_text_gemini(prompt):
                         chunks.append(chunk.text)
                 return ''.join(chunks)
             except Exception as e:
-                if '503' in str(e) or 'UNAVAILABLE' in str(e):
+                if '503' in str(e) or 'UNAVAILABLE' in str(e) or '404' in str(e) or 'NOT_FOUND' in str(e):
                     if attempt < 2:
                         print(f"  [{model} unavailable] Retrying in 15s... (attempt {attempt + 2}/3)")
                         time.sleep(15)
