@@ -7,10 +7,16 @@ A command-line tool for analyzing your Yahoo Fantasy Baseball league and generat
 - **Roster analysis** — View your active roster, bench, and injured list
 - **H2H category snapshots** — Track category-by-category scoring vs. opponent
 - **Streaming pitcher targets** — Find available pitchers ranked by scoring potential (ERA, WHIP, K9, schedule difficulty)
+- **Two-start pitchers** — Pitchers (rostered or available) with 2+ starts in the current fantasy week (runs Mon/Tue only)
 - **Waiver wire recommendations** — Discover eligible RP targets by saves + holds
+- **Recent form** — Hot/cold batters and pitchers based on last 14 days vs. season stats
+- **Category targets** — Chase/protect/concede breakdown with best available waiver suggestion per chase category
+- **Trade candidates** — Sell-high and buy-low suggestions derived from recent form and waiver availability
+- **Standings** — Your team's current rank, record, and league position
 - **Recent transactions** — Monitor MLB call-ups, send-downs, and IL moves
 - **Schedule density** — See which of your players have the most games coming up
 - **AI advisor** — Get actionable advice via Claude or Google Gemini (with real-time Google Search grounding)
+- **Roster management** — Add, drop, claim, and set lineups from the CLI
 - **API caching** — Cache Yahoo Fantasy and MLB Stats API responses for faster dev/debug iterations
 
 ## Setup
@@ -100,8 +106,11 @@ python fantasy_bot.py analyze
 # Show only streaming pitchers
 python fantasy_bot.py analyze --section streaming
 
-# View specific section: injuries, streaming, waivers, waiver_pitchers, categories, news
+# View specific section (see Available Sections below)
 python fantasy_bot.py analyze --section <section>
+
+# Look ahead more days for streaming targets (default: 3)
+python fantasy_bot.py analyze --section streaming --days 5
 
 # Use cached API data (faster for dev/debug)
 python fantasy_bot.py --cache analyze
@@ -117,15 +126,44 @@ python fantasy_bot.py email-report
 
 # Email to specific recipient (overrides EMAIL_TO)
 python fantasy_bot.py email-report --email alternate@example.com
+
+# Show your current roster
+python fantasy_bot.py roster
+
+# List free agents by position
+python fantasy_bot.py free-agents SP
+
+# List players on waivers
+python fantasy_bot.py waivers
+
+# Add a free agent (use player ID from free-agents output)
+python fantasy_bot.py add <player_id>
+
+# Drop a player
+python fantasy_bot.py drop <player_id>
+
+# Add and drop atomically (free agent)
+python fantasy_bot.py add-drop <add_id> <drop_id>
+
+# Submit a waiver claim (add + drop)
+python fantasy_bot.py claim <add_id> <drop_id>
+
+# Set lineup positions
+python fantasy_bot.py lineup --set <player_id>:<position> --set <player_id>:<position>
 ```
 
 ### Available Sections
 
 - `injuries` — Roster alerts (IL, day-to-day, etc.)
 - `streaming` — Available pitchers ranked by scoring potential
+- `two_start_pitchers` — Pitchers with 2+ starts this fantasy week (Mon/Tue only)
 - `waivers` — Waiver wire hitter targets
 - `waiver_pitchers` — Waiver-eligible relief pitchers (FA + waivers) ranked by saves + holds
 - `categories` — Head-to-head category snapshots vs. opponent
+- `category_targets` — Chase/protect/concede breakdown with waiver suggestions per chase category
+- `recent_form` — Hot/cold batters and pitchers (last 14 days vs. season)
+- `trade_candidates` — Sell-high and buy-low trade suggestions
+- `standings` — Your team's current rank and record
 - `news` — Recent MLB transactions and your roster's upcoming game schedule
 
 ## Example Workflows
