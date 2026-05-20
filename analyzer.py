@@ -503,11 +503,25 @@ def _categories(lg):
 
 
 def _standings(lg):
-    """Return my team's standings: rank, wins, losses, ties, total_teams."""
+    """Return my team's standings: rank, wins, losses, ties, total_teams, adds_used, adds_remaining."""
     try:
         my_key = lg.team_key()
         raw = lg.standings()
         total = len(raw)
+
+        adds_used      = None
+        adds_remaining = None
+        try:
+            settings      = lg.settings()
+            max_weekly    = int(settings.get('max_weekly_adds', 0))
+            teams         = lg.teams()
+            my_team       = teams.get(my_key, {})
+            roster_adds   = my_team.get('roster_adds', {})
+            adds_used     = int(roster_adds.get('value', 0)) if roster_adds else 0
+            adds_remaining = max(0, max_weekly - adds_used) if max_weekly else None
+        except Exception:
+            pass
+
         for team in raw:
             if not isinstance(team, dict):
                 continue
@@ -515,13 +529,16 @@ def _standings(lg):
                 continue
             ot = team.get('outcome_totals', {})
             return {
-                'rank':        team.get('rank', '?'),
-                'wins':        ot.get('wins', '?'),
-                'losses':      ot.get('losses', '?'),
-                'ties':        ot.get('ties', 0),
-                'total_teams': total,
+                'rank':           team.get('rank', '?'),
+                'wins':           ot.get('wins', '?'),
+                'losses':         ot.get('losses', '?'),
+                'ties':           ot.get('ties', 0),
+                'total_teams':    total,
+                'adds_used':      adds_used,
+                'adds_remaining': adds_remaining,
             }
-        return {'rank': '?', 'wins': '?', 'losses': '?', 'ties': 0, 'total_teams': total}
+        return {'rank': '?', 'wins': '?', 'losses': '?', 'ties': 0, 'total_teams': total,
+                'adds_used': adds_used, 'adds_remaining': adds_remaining}
     except Exception as e:
         return {'error': str(e)}
 
