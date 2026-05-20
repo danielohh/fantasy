@@ -223,6 +223,8 @@ def cmd_analyze(args):
         _print_category_targets(results['category_targets'])
     if 'trade_candidates' in results:
         _print_trade_candidates(results['trade_candidates'])
+    if 'ownership_trends' in results:
+        _print_ownership_trends(results['ownership_trends'])
 
 
 def cmd_advise(args):
@@ -529,6 +531,27 @@ def cmd_email_report(args):
     else:
         html.append(none_msg)
 
+    # ── Ownership Trends ─────────────────────────────────────────────────────
+    html.append(_h('YAHOO-WIDE OWNERSHIP TRENDS'))
+    ownership = results.get('ownership_trends', {})
+    trend_adds  = ownership.get('trending_adds', [])[:10] if isinstance(ownership, dict) else []
+    trend_drops = ownership.get('trending_drops', [])[:10] if isinstance(ownership, dict) else []
+    if trend_adds or trend_drops:
+        rows = []
+        for p in trend_adds:
+            rows.append([_badge('↑ ADD', '#fff', '#27ae60'),
+                         f'<strong>{p["name"]}</strong>', p['position'],
+                         f'{p["percent_owned"]}%',
+                         f'<span style="color:#27ae60">+{p["delta"]:.0f}%</span>'])
+        for p in trend_drops:
+            rows.append([_badge('↓ DROP', '#fff', '#e74c3c'),
+                         f'<strong>{p["name"]}</strong>', p['position'],
+                         f'{p["percent_owned"]}%',
+                         f'<span style="color:#e74c3c">{p["delta"]:.0f}%</span>'])
+        html.append(_table(['Trend', 'Player', 'Pos', 'Owned', 'Δ this week'], rows))
+    else:
+        html.append(none_msg)
+
     # ── Roster Schedule ──────────────────────────────────────────────────────
     html.append(_h('ROSTER SCHEDULE (most games this week)'))
     roster_schedule = news.get('roster_schedule', [])
@@ -577,7 +600,7 @@ def _advise_gemini(prompt):
     config = types.GenerateContentConfig(
         tools=[types.Tool(google_search=types.GoogleSearch())],
     )
-    models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite']
+    models = ['gemini-3.5-flash', 'gemini-2.5-flash']
     for model in models:
         for attempt in range(3):
             try:
@@ -624,7 +647,7 @@ def _get_advise_text_gemini(prompt):
     config = types.GenerateContentConfig(
         tools=[types.Tool(google_search=types.GoogleSearch())],
     )
-    models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite']
+    models = ['gemini-3.5-flash', 'gemini-2.5-flash']
     for model in models:
         for attempt in range(3):
             try:
@@ -699,10 +722,11 @@ def _build_advise_prompt(results):
                     f"vs {p['opponent']} ({ha}){extra} | ERA {s.get('era','--')} "
                     f"WHIP {s.get('whip','--')} K/9 {s.get('k9','--')}"
                 )
-        if drops:
+        sp_drops = [d for d in drops if d['slot'] == 'SP']
+        if sp_drops:
             lines.append('  My active SPs with no start in window:')
-            for d in drops:
-                lines.append(f"    {d['player_name']} (slot {d['slot']})")
+            for d in sp_drops:
+                lines.append(f"    {d['player_name']}")
 
     waiver_pitchers = results.get('waiver_pitchers', [])
     if waiver_pitchers:
@@ -854,6 +878,21 @@ def _build_advise_prompt(results):
             for p in buy[:3]:
                 lines.append(f"    {p['player_name']} — season OPS {p['season_ops']:.3f}")
 
+    ownership = results.get('ownership_trends', {})
+    if isinstance(ownership, dict):
+        adds  = ownership.get('trending_adds', [])[:10]
+        drops = ownership.get('trending_drops', [])[:10]
+        if adds or drops:
+            lines.append('\nYAHOO-WIDE OWNERSHIP TRENDS (week-over-week % change across all leagues):')
+        if adds:
+            lines.append('  Trending adds (rising ownership):')
+            for p in adds:
+                lines.append(f"    {p['name']} ({p['position']}) owned {p['percent_owned']}% +{p['delta']:.0f}% this week")
+        if drops:
+            lines.append('  Trending drops (falling ownership):')
+            for p in drops:
+                lines.append(f"    {p['name']} ({p['position']}) owned {p['percent_owned']}% {p['delta']:.0f}% this week")
+
     lines.append(
         '\nGive me 2-3 specific moves, prioritized by: (1) impact on this week\'s matchup, '
         'then (2) roster improvement. One sentence per move. No preamble. '
@@ -910,6 +949,27 @@ def _print_trade_candidates(data):
         for p in buy_low[:5]:
             print(f"    {p['player_name']:<25} season OPS {p['season_ops']:.3f}  "
                   f"({p['percent_owned']}% owned)")
+
+
+def _print_ownership_trends(data):
+    _header("YAHOO-WIDE OWNERSHIP TRENDS (week-over-week)")
+    if not isinstance(data, dict):
+        print("  No data.")
+        return
+    adds  = data.get('trending_adds', [])
+    drops = data.get('trending_drops', [])
+    if adds:
+        print("  TRENDING ADDS (ownership % rising across all Yahoo leagues):")
+        print(f"  {'Player':<25} {'Pos':<8} {'Owned%':>7}  {'Δ':>6}")
+        print(f"  {'-'*52}")
+        for p in adds:
+            print(f"  {p['name']:<25} {p['position']:<8} {str(p['percent_owned']):>6}%  +{p['delta']:.0f}%")
+    if drops:
+        print("\n  TRENDING DROPS (ownership % falling across all Yahoo leagues):")
+        print(f"  {'Player':<25} {'Pos':<8} {'Owned%':>7}  {'Δ':>6}")
+        print(f"  {'-'*52}")
+        for p in drops:
+            print(f"  {p['name']:<25} {p['position']:<8} {str(p['percent_owned']):>6}%  {p['delta']:.0f}%")
 
 
 def _print_recent_form(data):
@@ -1180,7 +1240,8 @@ def main():
     p.add_argument('--section',
                    choices=['injuries', 'streaming', 'waivers', 'waiver_pitchers',
                             'categories', 'news', 'recent_form', 'two_start_pitchers',
-                            'category_targets', 'trade_candidates', 'standings'],
+                            'category_targets', 'trade_candidates', 'standings',
+                            'ownership_trends'],
                    default=None, help='Run one section only (default: all)')
     p.add_argument('--days', type=int, default=3,
                    help='Days ahead to look for streaming starts (default: 3)')
