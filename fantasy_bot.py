@@ -223,6 +223,8 @@ def cmd_analyze(args):
         _print_category_targets(results['category_targets'])
     if 'trade_candidates' in results:
         _print_trade_candidates(results['trade_candidates'])
+    if 'standings' in results:
+        _print_standings(results['standings'])
     if 'ownership_trends' in results:
         _print_ownership_trends(results['ownership_trends'])
 
@@ -689,9 +691,13 @@ def _build_advise_prompt(results):
         ties  = standings.get('ties', 0)
         total = standings.get('total_teams', '?')
         record_str = f"{wins}-{losses}" + (f"-{ties}" if ties else '')
+        adds_remaining = standings.get('adds_remaining')
+        adds_used      = standings.get('adds_used')
+        adds_str = (f" Adds remaining this week: {adds_remaining} "
+                    f"(used {adds_used})." if adds_remaining is not None else '')
         lines.append(
             f"League: {total}-team H2H categories. Scoring: {scoring_cats}.\n"
-            f"Standings: {record_str}, rank {rank}/{total}. Today: {day_name}."
+            f"Standings: {record_str}, rank {rank}/{total}. Today: {day_name}.{adds_str}"
         )
     else:
         lines.append(
@@ -949,6 +955,19 @@ def _print_trade_candidates(data):
         for p in buy_low[:5]:
             print(f"    {p['player_name']:<25} season OPS {p['season_ops']:.3f}  "
                   f"({p['percent_owned']}% owned)")
+
+
+def _print_standings(data):
+    _header("STANDINGS")
+    if not data or 'error' in data:
+        print(f"  Error: {data.get('error', 'No data')}")
+        return
+    record = f"{data.get('wins','?')}-{data.get('losses','?')}"
+    if data.get('ties'):
+        record += f"-{data['ties']}"
+    print(f"  Rank {data.get('rank','?')} of {data.get('total_teams','?')}  |  Record: {record}")
+    if data.get('adds_remaining') is not None:
+        print(f"  Adds this week: {data['adds_used']} used, {data['adds_remaining']} remaining")
 
 
 def _print_ownership_trends(data):
