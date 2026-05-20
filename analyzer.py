@@ -67,6 +67,7 @@ def analyze(lg, section=None, days=3, progress=None):
         'recent_form':        lambda: _recent_form(roster, _prog),
         'two_start_pitchers': lambda: _two_start_pitchers(roster, lg, waiver_players, _prog),
         'standings':          lambda: _standings(lg),
+        'ownership_trends':   lambda: _ownership_trends(lg, _prog),
     }
 
     # Derived sections depend on other sections' results
@@ -123,16 +124,18 @@ def _injuries(roster):
         pid    = p['player_id']
 
         if status in INJURY_STATUSES:
+            is_dtd = status == 'DTD'
             if slot not in IL_SLOTS and slot not in BN_SLOTS:
+                action = 'Move to BN — DTD players cannot be placed on IL' if is_dtd else 'Move to IL or BN immediately'
                 alerts.append({
                     'type': 'injured_in_active_slot',
                     'player_name': name,
                     'player_id': pid,
                     'status': status,
                     'current_slot': slot,
-                    'action': 'Move to IL or BN immediately',
+                    'action': action,
                 })
-            elif slot in BN_SLOTS:
+            elif slot in BN_SLOTS and not is_dtd:
                 if il_available > 0:
                     action = 'Move to IL slot to free up a BN spot'
                 else:
@@ -1039,3 +1042,81 @@ def _trade_candidates(recent_form_result, waivers_result, categories_result=None
 
     buy_low.sort(key=lambda x: -x['season_ops'])
     return {'sell_high': sell_high, 'buy_low': buy_low}
+
+
+# ---------------------------------------------------------------------------
+# Section: ownership_trends
+# ---------------------------------------------------------------------------
+
+def _ownership_trends(lg, progress=None):
+    """
+    Returns players whose Yahoo-wide ownership % changed most this week.
+    Fetches up to 100 available (FA + waiver) players and parses the 'delta'
+    field from Yahoo's percent_owned data — week-over-week ownership change
+    across all Yahoo leagues.
+
+    Returns:
+      trending_adds  - [{name, player_id, position, percent_owned, delta}] sorted desc
+      trending_drops - same, sorted asc (most-dropped first)
+    """
+    def _p(msg):
+        if progress: progress(msg)
+
+    _p("Fetching Yahoo-wide ownership trend data...")
+    seen = {}
+
+    for status in ('FA', 'W'):
+        for start in range(0, 75, 25):
+            try:
+                raw = lg.yhandler.get_players_raw(lg.league_id, start, status)
+                p_block = (raw.get('fantasy_content', {})
+                              .get('league', [{}, {}])[1]
+                              .get('players', {}))
+                count = p_block.get('count', 0)
+                if count == 0:
+                    break
+                for i in range(count):
+                    entry = p_block.get(str(i), {}).get('player', [{}, {}])
+                    if not isinstance(entry, list) or len(entry) < 2:
+                        continue
+                    meta      = entry[0]
+                    po_block  = entry[1].get('percent_owned', [])
+
+                    name = player_id = position = ''
+                    if isinstance(meta, list):
+                        for item in meta:
+                            if isinstance(item, dict):
+                                if 'name' in item:
+                                    name = item['name'].get('full', '')
+                                elif 'player_id' in item:
+                                    player_id = item['player_id']
+                                elif 'display_position' in item:
+                                    position = item['display_position']
+
+                    po_value = po_delta = None
+                    if isinstance(po_block, list):
+                        for item in po_block:
+                            if isinstance(item, dict):
+                                if 'value' in item:
+                                    po_value = item['value']
+                                elif 'delta' in item:
+                                    po_delta = item['delta']
+
+                    if name and po_delta is not None and name not in seen:
+                        seen[name] = {
+                            'name':          name,
+                            'player_id':     player_id,
+                            'position':      position,
+                            'percent_owned': po_value or 0,
+                            'delta':         float(po_delta),
+                        }
+                if count < 25:
+                    break
+            except Exception:
+                break
+
+    all_players = list(seen.values())
+    trending_adds  = sorted([p for p in all_players if p['delta'] > 0], key=lambda x: -x['delta'])[:15]
+    trending_drops = sorted([p for p in all_players if p['delta'] < 0], key=lambda x:  x['delta'])[:15]
+
+    return {'trending_adds': trending_adds, 'trending_drops': trending_drops}
