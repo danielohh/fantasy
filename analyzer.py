@@ -67,7 +67,7 @@ def analyze(lg, section=None, days=3, progress=None):
         'recent_form':        lambda: _recent_form(roster, _prog),
         'two_start_pitchers': lambda: _two_start_pitchers(roster, lg, waiver_players, _prog),
         'standings':          lambda: _standings(lg),
-        'ownership_trends':   lambda: _ownership_trends(lg, _prog),
+        'ownership_trends':   lambda: _ownership_trends(lg, roster, _prog),
     }
 
     # Derived sections depend on other sections' results
@@ -1065,16 +1065,18 @@ def _trade_candidates(recent_form_result, waivers_result, categories_result=None
 # Section: ownership_trends
 # ---------------------------------------------------------------------------
 
-def _ownership_trends(lg, progress=None):
+def _ownership_trends(lg, roster, progress=None):
     """
     Returns players whose Yahoo-wide ownership % changed most this week.
-    Fetches up to 100 available (FA + waiver) players and parses the 'delta'
+    Fetches up to 75 available (FA + waiver) players and parses the 'delta'
     field from Yahoo's percent_owned data — week-over-week ownership change
-    across all Yahoo leagues.
+    across all Yahoo leagues. Also checks your roster for players being
+    dropped at a high rate.
 
     Returns:
       trending_adds  - [{name, player_id, position, percent_owned, delta}] sorted desc
       trending_drops - same, sorted asc (most-dropped first)
+      roster_drops   - roster players with a notable negative delta
     """
     def _p(msg):
         if progress: progress(msg)
@@ -1136,4 +1138,57 @@ def _ownership_trends(lg, progress=None):
     trending_adds  = sorted([p for p in all_players if p['delta'] > 0], key=lambda x: -x['delta'])[:15]
     trending_drops = sorted([p for p in all_players if p['delta'] < 0], key=lambda x:  x['delta'])[:15]
 
-    return {'trending_adds': trending_adds, 'trending_drops': trending_drops}
+    # Check roster players for high drop rates
+    roster_drops = []
+    roster_ids = [str(p['player_id']) for p in roster if p.get('player_id')]
+    if roster_ids:
+        try:
+            _p("Checking roster ownership trends...")
+            raw = lg.yhandler.get_percent_owned_raw(lg.league_id, roster_ids)
+            players_block = (raw.get('fantasy_content', {})
+                                .get('league', [{}, {}])[1]
+                                .get('players', {}))
+            count = players_block.get('count', 0)
+            for i in range(count):
+                entry = players_block.get(str(i), {}).get('player', [{}, {}])
+                if not isinstance(entry, list) or len(entry) < 2:
+                    continue
+                meta     = entry[0]
+                po_block = entry[1].get('percent_owned', [])
+
+                name = player_id = position = ''
+                if isinstance(meta, list):
+                    for item in meta:
+                        if isinstance(item, dict):
+                            if 'name' in item:
+                                name = item['name'].get('full', '')
+                            elif 'player_id' in item:
+                                player_id = item['player_id']
+                            elif 'display_position' in item:
+                                position = item['display_position']
+
+                po_value = po_delta = None
+                if isinstance(po_block, list):
+                    for item in po_block:
+                        if isinstance(item, dict):
+                            if 'value' in item:
+                                po_value = item['value']
+                            elif 'delta' in item:
+                                po_delta = item['delta']
+
+                if name and po_delta is not None and float(po_delta) <= -3:
+                    slot = next((p['selected_position'] for p in roster if str(p.get('player_id')) == str(player_id)), '')
+                    roster_drops.append({
+                        'name':          name,
+                        'player_id':     player_id,
+                        'position':      position,
+                        'slot':          slot,
+                        'percent_owned': po_value or 0,
+                        'delta':         float(po_delta),
+                    })
+        except Exception:
+            pass
+
+    roster_drops.sort(key=lambda x: x['delta'])
+
+    return {'trending_adds': trending_adds, 'trending_drops': trending_drops, 'roster_drops': roster_drops}

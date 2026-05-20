@@ -536,10 +536,16 @@ def cmd_email_report(args):
     # ── Ownership Trends ─────────────────────────────────────────────────────
     html.append(_h('YAHOO-WIDE OWNERSHIP TRENDS'))
     ownership = results.get('ownership_trends', {})
-    trend_adds  = ownership.get('trending_adds', [])[:10] if isinstance(ownership, dict) else []
-    trend_drops = ownership.get('trending_drops', [])[:10] if isinstance(ownership, dict) else []
-    if trend_adds or trend_drops:
+    trend_adds    = ownership.get('trending_adds', [])[:10] if isinstance(ownership, dict) else []
+    trend_drops   = ownership.get('trending_drops', [])[:10] if isinstance(ownership, dict) else []
+    roster_drops  = ownership.get('roster_drops', []) if isinstance(ownership, dict) else []
+    if roster_drops or trend_adds or trend_drops:
         rows = []
+        for p in roster_drops:
+            rows.append([_badge('⚠ YOURS', '#fff', '#e67e22'),
+                         f'<strong>{p["name"]}</strong>', p['position'],
+                         f'{p["percent_owned"]}%',
+                         f'<span style="color:#e74c3c">{p["delta"]:.0f}%</span>'])
         for p in trend_adds:
             rows.append([_badge('↑ ADD', '#fff', '#27ae60'),
                          f'<strong>{p["name"]}</strong>', p['position'],
@@ -886,10 +892,15 @@ def _build_advise_prompt(results):
 
     ownership = results.get('ownership_trends', {})
     if isinstance(ownership, dict):
-        adds  = ownership.get('trending_adds', [])[:10]
-        drops = ownership.get('trending_drops', [])[:10]
-        if adds or drops:
+        adds         = ownership.get('trending_adds', [])[:10]
+        drops        = ownership.get('trending_drops', [])[:10]
+        roster_drops = ownership.get('roster_drops', [])
+        if adds or drops or roster_drops:
             lines.append('\nYAHOO-WIDE OWNERSHIP TRENDS (week-over-week % change across all leagues):')
+        if roster_drops:
+            lines.append('  Your roster players being dropped widely:')
+            for p in roster_drops:
+                lines.append(f"    {p['name']} ({p['position']}, slot {p['slot']}) owned {p['percent_owned']}% {p['delta']:.0f}% this week — consider selling high or benching")
         if adds:
             lines.append('  Trending adds (rising ownership):')
             for p in adds:
@@ -975,8 +986,18 @@ def _print_ownership_trends(data):
     if not isinstance(data, dict):
         print("  No data.")
         return
-    adds  = data.get('trending_adds', [])
-    drops = data.get('trending_drops', [])
+    adds         = data.get('trending_adds', [])
+    drops        = data.get('trending_drops', [])
+    roster_drops = data.get('roster_drops', [])
+
+    if roster_drops:
+        print("  YOUR ROSTER — BEING DROPPED (flag for trade/bench review):")
+        print(f"  {'Player':<25} {'Slot':<6} {'Owned%':>7}  {'Δ':>6}")
+        print(f"  {'-'*52}")
+        for p in roster_drops:
+            print(f"  {p['name']:<25} {p['slot']:<6} {str(p['percent_owned']):>6}%  {p['delta']:.0f}%")
+        print()
+
     if adds:
         print("  TRENDING ADDS (ownership % rising across all Yahoo leagues):")
         print(f"  {'Player':<25} {'Pos':<8} {'Owned%':>7}  {'Δ':>6}")
